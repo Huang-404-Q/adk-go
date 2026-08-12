@@ -24,6 +24,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	agentinternal "google.golang.org/adk/v2/internal/agent"
 	"google.golang.org/adk/v2/internal/utils"
+	"google.golang.org/adk/v2/internal/workflowstate"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/workflow"
 )
@@ -156,7 +157,7 @@ func (a *workflowAgent) detectResume(ctx agent.InvocationContext) (map[string]an
 	//
 	// A wrong-but-deliberate answer (right name, unknown ID) still reaches
 	// Resume, so the caller keeps the ErrNothingToResume diagnostic.
-	known := knownInterruptIDs(state)
+	known := workflowstate.ActionableInterruptIDs(state)
 	responses := map[string]any{}
 	for _, fr := range frs {
 		if fr == nil || fr.ID == "" {
@@ -172,32 +173,4 @@ func (a *workflowAgent) detectResume(ctx agent.InvocationContext) (map[string]an
 	}
 
 	return responses, state, true, nil
-}
-
-// knownInterruptIDs collects the interrupt IDs of nodes the rehydrated run can
-// still act on — those waiting for an answer, and those a re-entry node is
-// about to be re-run with. A node that already settled is excluded, so a reply
-// to an interrupt this run has finished with no longer counts as a resume.
-//
-// ResumedInputs is included, not just Interrupts: the runner appends the reply
-// to the session before the agent runs, so on a genuine first resume the
-// interrupt is already resolved and rehydration hands it back on the node.
-func knownInterruptIDs(state *workflow.RunState) map[string]struct{} {
-	ids := map[string]struct{}{}
-	for _, ns := range state.Nodes {
-		if ns == nil || (ns.Status != workflow.NodeWaiting && ns.Status != workflow.NodePending) {
-			continue
-		}
-		for _, id := range ns.Interrupts {
-			if id != "" {
-				ids[id] = struct{}{}
-			}
-		}
-		for id := range ns.ResumedInputs {
-			if id != "" {
-				ids[id] = struct{}{}
-			}
-		}
-	}
-	return ids
 }

@@ -14,7 +14,11 @@
 
 package workflow
 
-import "github.com/google/jsonschema-go/jsonschema"
+import (
+	"github.com/google/jsonschema-go/jsonschema"
+
+	"google.golang.org/adk/v2/internal/workflowstate"
+)
 
 // NodeStatus is the lifecycle status of a node in the workflow graph.
 //
@@ -173,6 +177,53 @@ type RunState struct {
 	// and used by Resume to avoid re-triggering a handoff successor
 	// that already ran on a prior turn (idempotency). Not persisted.
 	completed map[string]bool
+}
+
+// actionableInterruptIDs returns the interrupt IDs this run can still do
+// something about: those a node is waiting for, those a re-entry node is about
+// to be re-run with, and those a node settled on this very turn. A
+// FunctionResponse matching none of them answers nothing here — it is a reply
+// to an interrupt this run has finished with, or was never aimed at this run.
+//
+// Reachable from the packages that dispatch a turn through
+// internal/workflowstate rather than as public API, since "settled on this very
+// turn" is only observable on a state fresh from ReconstructRunState.
+//
+//nolint:unused // installed into internal/workflowstate by init below.
+func (s *RunState) actionableInterruptIDs() map[string]struct{} {
+	ids := map[string]struct{}{}
+	for _, ns := range s.Nodes {
+		if ns == nil {
+			continue
+		}
+		// A completed node still counts on the turn its answer arrived:
+		// a handoff asker resolves from history and rehydrates completed,
+		// so its genuine first resume looks settled already.
+		if ns.Status != NodeWaiting && ns.Status != NodePending && !ns.answeredThisTurn {
+			continue
+		}
+		for _, id := range ns.Interrupts {
+			if id != "" {
+				ids[id] = struct{}{}
+			}
+		}
+		for id := range ns.ResumedInputs {
+			if id != "" {
+				ids[id] = struct{}{}
+			}
+		}
+	}
+	return ids
+}
+
+func init() {
+	workflowstate.ActionableInterruptIDs = func(runState any) map[string]struct{} {
+		st, ok := runState.(*RunState)
+		if !ok || st == nil {
+			return nil
+		}
+		return st.actionableInterruptIDs()
+	}
 }
 
 // NewRunState returns an empty state with the Nodes map
