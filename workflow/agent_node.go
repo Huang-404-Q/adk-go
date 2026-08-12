@@ -85,19 +85,26 @@ func applyAgentNodeDefaults(a agent.Agent, cfg NodeConfig) NodeConfig {
 }
 
 // NewAgentNodeWithSchemas is a convenience wrapper for NewAgentNodeWithSchemasTyped[any, any].
-// It uses explicitly provided schemas for both input and output.
+// It uses explicitly provided schemas for both input and output, and applies
+// the same LlmAgent defaults as [NewAgentNode].
 func NewAgentNodeWithSchemas(a agent.Agent, inputSchema, outputSchema *jsonschema.Schema, cfg NodeConfig) (*AgentNode, error) {
 	return newAgentNodeWithSchemasTyped[any, any](a, inputSchema, outputSchema, cfg)
 }
 
 // NewAgentNodeTyped creates a new node wrapping an agent using generics to
 // automatically infer input and output schemas from the provided types.
+// It applies the same LlmAgent defaults as [NewAgentNode].
 func NewAgentNodeTyped[Input, Output any](a agent.Agent, cfg NodeConfig) (*AgentNode, error) {
 	return newAgentNodeWithSchemasTyped[Input, Output](a, nil, nil, cfg)
 }
 
 // NewAgentNode creates a new node wrapping an agent. Input and output schemas
 // are inferred as `any`.
+//
+// When a is an LlmAgent, cfg.RerunOnResume defaults to &true, so a node paused
+// on a long-running tool request re-enters and finishes instead of handing the
+// raw reply to its successor. An explicit RerunOnResume is respected, and other
+// agent kinds keep the engine default (handoff).
 func NewAgentNode(a agent.Agent, cfg NodeConfig) (*AgentNode, error) {
 	return NewAgentNodeTyped[any, any](a, cfg)
 }
