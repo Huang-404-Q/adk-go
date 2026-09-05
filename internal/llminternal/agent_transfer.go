@@ -314,7 +314,7 @@ func instructionsForTransferToAgent(ctx agent.InvocationContext, curAgent, paren
 	// Suppress transfer instructions for task / single_turn agents:
 	// they reach their callees via FC delegation (TaskAgentTool /
 	// SingleTurnTool), not via transfer.
-	switch ModeFor(ctx, curAgent.Name(), cur.internal().Mode) {
+	switch ModeFor(ctx, curAgent.Name(), cur.internal()) {
 	case ModeTask, ModeSingleTurn:
 		return "", nil
 	}

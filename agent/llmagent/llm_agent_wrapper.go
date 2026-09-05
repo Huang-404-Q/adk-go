@@ -91,7 +91,7 @@ func RunLLMAgentAsNode(a agent.Agent, ctx agent.Context, nodeInput any) iter.Seq
 		// the agent is a plain conversational callee (a transfer target, say),
 		// which is what an undeclared mode means everywhere else.
 		mode := llminternal.ResolveMode(
-			llminternal.ModeFor(ctx, a.Name(), state.Mode),
+			llminternal.ModeFor(ctx, a.Name(), state),
 			llminternal.ModeChat,
 		)
 		switch mode {
@@ -107,7 +107,7 @@ func RunLLMAgentAsNode(a agent.Agent, ctx agent.Context, nodeInput any) iter.Seq
 		//
 		// As in AgentNode.Run, the binding travels in the context passed DOWN,
 		// which is what reaches the request processors.
-		bound := llminternal.WithBoundMode(ctx, a.Name(), mode)
+		bound := llminternal.WithBoundMode(ctx, a.Name(), state, mode)
 
 		// Task/single_turn modes build a per-agent InvocationContext that:
 		//   - rebinds Agent to a (matching adk-python's ic.agent=agent),
@@ -187,7 +187,7 @@ func PrepareLLMAgentInput(a agent.Agent, ctx agent.InvocationContext, nodeInput 
 	if ctx == nil {
 		return nil
 	}
-	if llminternal.ModeFor(ctx, a.Name(), llminternal.Reveal(llmA).Mode) != llminternal.ModeSingleTurn {
+	if llminternal.ModeFor(ctx, a.Name(), llminternal.Reveal(llmA)) != llminternal.ModeSingleTurn {
 		return nil
 	}
 	content := nodeInputToContent(nodeInput)

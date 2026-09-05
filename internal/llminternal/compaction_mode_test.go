@@ -37,14 +37,15 @@ func TestPromptTokenEstimator_UsesTheResolvedMode(t *testing.T) {
 	const agentName = "worker"
 
 	newCtx := func(bind bool) agent.InvocationContext {
+		state := &State{}
 		stdCtx := t.Context()
 		if bind {
-			stdCtx = WithBoundMode(stdCtx, agentName, ModeSingleTurn)
+			stdCtx = WithBoundMode(stdCtx, agentName, state, ModeSingleTurn)
 		}
 		return icontext.NewInvocationContext(stdCtx, icontext.InvocationContextParams{
 			Agent: &mockLLMAgent{
 				Agent: utils.Must(agent.New(agent.Config{Name: agentName})),
-				s:     &State{},
+				s:     state,
 			},
 			IsolationScope: "scope-1",
 			UserContent:    genai.NewContentFromText("do the thing", "user"),

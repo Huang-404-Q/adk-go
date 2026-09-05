@@ -106,8 +106,9 @@ func (n *AgentNode) Run(ctx agent.Context, input any) iter.Seq2[*session.Event, 
 		// single_turn node.
 		bound := context.Context(ctx)
 		if llmA, ok := n.agent.(llminternal.Agent); ok && llmA != nil {
-			mode := llminternal.ResolveMode(llminternal.Reveal(llmA).Mode, llminternal.ModeSingleTurn)
-			bound = llminternal.WithBoundMode(ctx, n.agent.Name(), mode)
+			state := llminternal.Reveal(llmA)
+			mode := llminternal.ResolveMode(state.Mode, llminternal.ModeSingleTurn)
+			bound = llminternal.WithBoundMode(ctx, n.agent.Name(), state, mode)
 		}
 
 		// Use existing agent context instead of implementing a new one.

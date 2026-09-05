@@ -661,8 +661,9 @@ func TestAgentNode_Run_AcceptsAToolContext(t *testing.T) {
 // Here a chat root named "coordinator" transfers to a workflow whose node wraps
 // a SequentialAgent — a composite, so the node binds nothing — whose child is a
 // DIFFERENT agent, also named "coordinator", declaring single_turn. That child
-// must still run single_turn. Before PlacedMode it read the root's chat binding
-// and was handed the identity preamble and transfer instructions the merge base
+// must still run single_turn. Before the binding carried the identity of the
+// agent it was resolved for, this child read the root's chat binding and was
+// handed the identity preamble and transfer instructions the merge base
 // correctly withheld.
 func TestAgentNode_ASameNamedNestedAgentKeepsItsOwnDeclaration(t *testing.T) {
 	t.Parallel()
@@ -840,5 +841,118 @@ func TestAgentNode_ASameNamedUndeclaredNestedAgentIsUnaffectedByTheRootBind(t *t
 
 	if colliding != renamed {
 		t.Errorf("the root's binding changed what a same-named UNDECLARED agent sees.\n colliding = %q\n renamed   = %q", colliding, renamed)
+	}
+}
+
+// The other direction of the same-name collision, and the one the earlier
+// declaration-based compensation could not catch: the nested agent declares
+// NOTHING, so there is no declaration to contradict.
+//
+// A graph node binds single_turn for an outer agent named "worker". That agent
+// transfers into a workflow whose node wraps a composite — so nothing rebinds —
+// and the composite's child is a DIFFERENT agent, also named "worker", also
+// undeclared. Being a composite's child with no placement of its own, it is a
+// chat agent and must be given the identity preamble and transfer tooling. The
+// merge base gave it both, because it read that agent's own State.
+func TestAgentNode_ASingleTurnPlacementDoesNotReachASameNamedUndeclaredDescendant(t *testing.T) {
+	t.Parallel()
+
+	innerLLM := &capturingLLM{}
+	innerPeer, err := llmagent.New(llmagent.Config{Name: "innerpeer", Model: &capturingLLM{}, Description: "inner peer"})
+	if err != nil {
+		t.Fatalf("llmagent.New(innerpeer): %v", err)
+	}
+	inner, err := llmagent.New(llmagent.Config{
+		Name:        "worker", // same name as the placed agent below, deliberately
+		Model:       innerLLM,
+		Instruction: "INNER_INSTRUCTION",
+		SubAgents:   []agent.Agent{innerPeer},
+	})
+	if err != nil {
+		t.Fatalf("llmagent.New(inner): %v", err)
+	}
+	seq, err := sequentialagent.New(sequentialagent.Config{
+		AgentConfig: agent.Config{Name: "seq", SubAgents: []agent.Agent{inner}},
+	})
+	if err != nil {
+		t.Fatalf("sequentialagent.New: %v", err)
+	}
+	innerNode, err := workflow.NewAgentNode(seq, workflow.NodeConfig{})
+	if err != nil {
+		t.Fatalf("NewAgentNode(inner): %v", err)
+	}
+	innerWf, err := workflowagent.New(workflowagent.Config{
+		Name: "innerwf", Description: "inner workflow",
+		Edges: []workflow.Edge{{From: workflow.Start, To: innerNode}},
+	})
+	if err != nil {
+		t.Fatalf("workflowagent.New(inner): %v", err)
+	}
+	// Placed at a graph node while declaring nothing, so it binds single_turn.
+	outer, err := llmagent.New(llmagent.Config{
+		Name: "worker",
+		Model: &testutil.MockModel{Responses: []*genai.Content{
+			genai.NewContentFromFunctionCall("transfer_to_agent",
+				map[string]any{"agent_name": "innerwf"}, "model"),
+			genai.NewContentFromText("outer done", "model"),
+		}},
+		SubAgents: []agent.Agent{innerWf},
+	})
+	if err != nil {
+		t.Fatalf("llmagent.New(outer): %v", err)
+	}
+	outerNode, err := workflow.NewAgentNode(outer, workflow.NodeConfig{})
+	if err != nil {
+		t.Fatalf("NewAgentNode(outer): %v", err)
+	}
+	wf, err := workflowagent.New(workflowagent.Config{
+		Name: "wf", Description: "outer workflow",
+		Edges: []workflow.Edge{{From: workflow.Start, To: outerNode}},
+	})
+	if err != nil {
+		t.Fatalf("workflowagent.New(outer): %v", err)
+	}
+	root, err := llmagent.New(llmagent.Config{
+		Name: "coordinator",
+		Model: &testutil.MockModel{Responses: []*genai.Content{
+			genai.NewContentFromFunctionCall("transfer_to_agent",
+				map[string]any{"agent_name": "wf"}, "model"),
+			genai.NewContentFromText("done", "model"),
+		}},
+		SubAgents: []agent.Agent{wf},
+	})
+	if err != nil {
+		t.Fatalf("llmagent.New(root): %v", err)
+	}
+	r, err := runner.New(runner.Config{
+		AppName:           "app",
+		Agent:             root,
+		SessionService:    session.InMemoryService(),
+		AutoCreateSession: true,
+	})
+	if err != nil {
+		t.Fatalf("runner.New rejected two same-named agents; the collision this pins is gone: %v", err)
+	}
+	msg := genai.NewContentFromText("go", genai.RoleUser)
+	for _, err := range r.Run(t.Context(), "u", "s1", msg, agent.RunConfig{}) {
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	}
+
+	if innerLLM.got == nil {
+		t.Fatal("the nested agent was never reached, so this test pins nothing")
+	}
+	si := innerLLM.systemInstruction()
+	// The two assertions below are presences, but an empty instruction would
+	// fail them for the wrong reason, so pin the agent's own text first.
+	if !strings.Contains(si, "INNER_INSTRUCTION") {
+		t.Fatalf("the agent's own instruction is missing, so the checks below prove nothing; si = %q", si)
+	}
+	if !strings.Contains(si, "You are an agent") {
+		t.Error("the nested undeclared agent lost its identity preamble; it read the outer agent's single_turn binding")
+	}
+	if !strings.Contains(si, "transfer_to_agent") {
+		t.Error("the nested undeclared agent lost its transfer instructions; it read the outer agent's single_turn binding")
 	}
 }

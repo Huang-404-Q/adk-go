@@ -42,70 +42,105 @@ func TestResolveMode(t *testing.T) {
 	}
 }
 
-// The binding is keyed by agent, and the two properties that follow from that
-// are what the whole design rests on. Neither is otherwise reachable from a
-// test: no in-tree path binds two different values for one name, and no in-tree
-// path reads a binding for an agent that is not the one running.
+// The binding is keyed by agent NAME and validated against agent IDENTITY, and
+// the properties that follow are what the whole design rests on. None is
+// otherwise reachable from a test: no in-tree path binds two different values
+// for one name, and no in-tree path reads a binding for an agent that is not
+// the one running.
 func TestBoundMode_Scoping(t *testing.T) {
 	t.Parallel()
 
 	t.Run("a binding is invisible to another agent", func(t *testing.T) {
-		ctx := WithBoundMode(t.Context(), "worker", ModeSingleTurn)
-		if _, ok := BoundMode(ctx, "other"); ok {
+		worker, other := &State{}, &State{Mode: ModeChat}
+		ctx := WithBoundMode(t.Context(), "worker", worker, ModeSingleTurn)
+		if _, ok := BoundMode(ctx, "other", other); ok {
 			t.Error("a binding made for \"worker\" was visible to \"other\"")
 		}
-		if got := ModeFor(ctx, "other", ModeChat); got != ModeChat {
+		if got := ModeFor(ctx, "other", other); got != ModeChat {
 			t.Errorf("ModeFor(other) = %q, want the declaration %q", got, ModeChat)
 		}
 	})
 
 	t.Run("binding one agent leaves another's alone", func(t *testing.T) {
-		ctx := WithBoundMode(t.Context(), "worker", ModeSingleTurn)
-		ctx = WithBoundMode(ctx, "helper", ModeChat)
+		worker, helper := &State{}, &State{}
+		ctx := WithBoundMode(t.Context(), "worker", worker, ModeSingleTurn)
+		ctx = WithBoundMode(ctx, "helper", helper, ModeChat)
 
 		// This is the transfer round trip in miniature: helper's binding must
 		// not erase worker's, or worker loses its placement on re-entry.
-		if got, ok := BoundMode(ctx, "worker"); !ok || got != ModeSingleTurn {
+		if got, ok := BoundMode(ctx, "worker", worker); !ok || got != ModeSingleTurn {
 			t.Errorf("BoundMode(worker) = (%q, %v) after binding helper, want (%q, true)", got, ok, ModeSingleTurn)
 		}
-		if got, ok := BoundMode(ctx, "helper"); !ok || got != ModeChat {
+		if got, ok := BoundMode(ctx, "helper", helper); !ok || got != ModeChat {
 			t.Errorf("BoundMode(helper) = (%q, %v), want (%q, true)", got, ok, ModeChat)
 		}
 	})
 
 	t.Run("re-binding the same agent shadows the outer binding", func(t *testing.T) {
-		outer := WithBoundMode(t.Context(), "worker", ModeChat)
-		inner := WithBoundMode(outer, "worker", ModeSingleTurn)
+		worker := &State{}
+		outer := WithBoundMode(t.Context(), "worker", worker, ModeChat)
+		inner := WithBoundMode(outer, "worker", worker, ModeSingleTurn)
 
-		if got, ok := BoundMode(inner, "worker"); !ok || got != ModeSingleTurn {
+		if got, ok := BoundMode(inner, "worker", worker); !ok || got != ModeSingleTurn {
 			t.Errorf("BoundMode on the inner context = (%q, %v), want (%q, true) — "+
 				"a re-binding placement must win over the one it nests inside", got, ok, ModeSingleTurn)
 		}
 		// Shadowing, not mutation: the outer context is a separate value and
 		// still answers with what it was given.
-		if got, ok := BoundMode(outer, "worker"); !ok || got != ModeChat {
+		if got, ok := BoundMode(outer, "worker", worker); !ok || got != ModeChat {
 			t.Errorf("BoundMode on the outer context = (%q, %v), want (%q, true) — "+
 				"an inner bind must not reach back into the context it derived from", got, ok, ModeChat)
 		}
 	})
 
+	// The collision the name key alone cannot resolve, and the reason the
+	// binding carries a state pointer. Two DISTINCT agents share one name —
+	// runner.New accepts that when one of them sits behind a graph node — and
+	// the one that was never placed must keep its own declaration.
+	t.Run("a binding does not reach a different agent of the same name", func(t *testing.T) {
+		placed, nested := &State{}, &State{}
+		ctx := WithBoundMode(t.Context(), "worker", placed, ModeSingleTurn)
+
+		if _, ok := BoundMode(ctx, "worker", nested); ok {
+			t.Error("a placement resolved for one agent was reported as governing a different agent of the same name")
+		}
+		if got := ModeFor(ctx, "worker", nested); got != ModeUnset {
+			t.Errorf("ModeFor(nested) = %q, want its own (unset) declaration", got)
+		}
+		if got, ok := BoundMode(ctx, "worker", placed); !ok || got != ModeSingleTurn {
+			t.Errorf("BoundMode(placed) = (%q, %v), want (%q, true) — the agent it WAS resolved for still sees it", got, ok, ModeSingleTurn)
+		}
+	})
+
 	t.Run("an unset mode does not bind", func(t *testing.T) {
-		ctx := WithBoundMode(t.Context(), "worker", ModeUnset)
-		if _, ok := BoundMode(ctx, "worker"); ok {
+		worker := &State{Mode: ModeTask}
+		ctx := WithBoundMode(t.Context(), "worker", worker, ModeUnset)
+		if _, ok := BoundMode(ctx, "worker", worker); ok {
 			t.Error("ModeUnset produced a binding; BoundMode would then report a placement that resolved nothing")
 		}
-		if got := ModeFor(ctx, "worker", ModeTask); got != ModeTask {
+		if got := ModeFor(ctx, "worker", worker); got != ModeTask {
 			t.Errorf("ModeFor = %q, want the declaration %q", got, ModeTask)
 		}
 	})
 
 	t.Run("an empty name binds like any other", func(t *testing.T) {
-		ctx := WithBoundMode(t.Context(), "", ModeSingleTurn)
-		if got, ok := BoundMode(ctx, ""); !ok || got != ModeSingleTurn {
+		nameless, worker := &State{}, &State{}
+		ctx := WithBoundMode(t.Context(), "", nameless, ModeSingleTurn)
+		if got, ok := BoundMode(ctx, "", nameless); !ok || got != ModeSingleTurn {
 			t.Errorf("BoundMode(\"\") = (%q, %v), want (%q, true)", got, ok, ModeSingleTurn)
 		}
-		if _, ok := BoundMode(ctx, "worker"); ok {
+		if _, ok := BoundMode(ctx, "worker", worker); ok {
 			t.Error("a binding for the empty name was visible to a named agent")
+		}
+	})
+
+	// Two NAMELESS agents are the case identity rescues and a name key cannot:
+	// they share the empty-string slot entirely.
+	t.Run("two nameless agents do not share a binding", func(t *testing.T) {
+		placed, nested := &State{}, &State{}
+		ctx := WithBoundMode(t.Context(), "", placed, ModeSingleTurn)
+		if _, ok := BoundMode(ctx, "", nested); ok {
+			t.Error("a nameless agent inherited a placement resolved for a different nameless agent")
 		}
 	})
 }
@@ -114,55 +149,43 @@ func TestModeFor(t *testing.T) {
 	t.Parallel()
 
 	t.Run("the binding supplies a mode the agent did not declare", func(t *testing.T) {
-		ctx := WithBoundMode(t.Context(), "worker", ModeSingleTurn)
-		if got := ModeFor(ctx, "worker", ModeUnset); got != ModeSingleTurn {
+		worker := &State{}
+		ctx := WithBoundMode(t.Context(), "worker", worker, ModeSingleTurn)
+		if got := ModeFor(ctx, "worker", worker); got != ModeSingleTurn {
 			t.Errorf("ModeFor = %q, want %q", got, ModeSingleTurn)
 		}
 	})
 
 	t.Run("the declaration is the fallback", func(t *testing.T) {
-		if got := ModeFor(context.Background(), "worker", ModeChat); got != ModeChat {
+		if got := ModeFor(context.Background(), "worker", &State{Mode: ModeChat}); got != ModeChat {
 			t.Errorf("ModeFor with no binding = %q, want %q", got, ModeChat)
 		}
 	})
 
-	// A binder binds ResolveMode(declared, placementDefault), so for the agent
-	// a binding was resolved for it always equals the declaration. A binding
-	// that contradicts one therefore belongs to a same-named agent, and the
-	// declaration is the right answer. Without this, a chat root placed a
-	// same-named nested single_turn agent into chat.
-	t.Run("a contradicting binding is another agent's and loses", func(t *testing.T) {
-		ctx := WithBoundMode(t.Context(), "worker", ModeChat)
-		if got := ModeFor(ctx, "worker", ModeSingleTurn); got != ModeSingleTurn {
-			t.Errorf("ModeFor = %q, want the declaration %q", got, ModeSingleTurn)
+	// A placement is authoritative for the agent it was resolved for, including
+	// over that agent's own declaration — they agree in practice, since a binder
+	// binds ResolveMode(declared, placementDefault), but the binding is what
+	// knows where the agent was put.
+	t.Run("the binding wins for the agent it was resolved for", func(t *testing.T) {
+		worker := &State{Mode: ModeChat}
+		ctx := WithBoundMode(t.Context(), "worker", worker, ModeSingleTurn)
+		if got := ModeFor(ctx, "worker", worker); got != ModeSingleTurn {
+			t.Errorf("ModeFor = %q, want the bound %q", got, ModeSingleTurn)
 		}
 	})
-}
 
-func TestPlacedMode(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		bind     Mode // ModeUnset means "bind nothing"
-		declared Mode
-		want     Mode
-		wantOK   bool
-	}{
-		{"no binding, no declaration", ModeUnset, ModeUnset, ModeUnset, false},
-		{"no binding at all", ModeUnset, ModeSingleTurn, ModeUnset, false},
-		{"binding for an undeclared agent governs it", ModeSingleTurn, ModeUnset, ModeSingleTurn, true},
-		{"binding agreeing with the declaration governs it", ModeSingleTurn, ModeSingleTurn, ModeSingleTurn, true},
-		{"binding contradicting the declaration is another agent's", ModeChat, ModeSingleTurn, ModeUnset, false},
-		{"single_turn binding contradicting a chat declaration is another agent's", ModeSingleTurn, ModeChat, ModeUnset, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := WithBoundMode(t.Context(), "worker", tt.bind)
-			got, ok := PlacedMode(ctx, "worker", tt.declared)
-			if got != tt.want || ok != tt.wantOK {
-				t.Errorf("PlacedMode = (%q, %v), want (%q, %v)", got, ok, tt.want, tt.wantOK)
+	// ...and carries no weight for anyone else, whatever they declare. Without
+	// this, a chat root placed a same-named nested single_turn agent into chat,
+	// and a single_turn graph node placed a same-named nested undeclared agent
+	// into single_turn.
+	t.Run("another agent's binding loses to this agent's declaration", func(t *testing.T) {
+		placed := &State{}
+		for _, declared := range []Mode{ModeUnset, ModeChat, ModeSingleTurn, ModeTask} {
+			nested := &State{Mode: declared}
+			ctx := WithBoundMode(t.Context(), "worker", placed, ModeSingleTurn)
+			if got := ModeFor(ctx, "worker", nested); got != declared {
+				t.Errorf("ModeFor with declared %q = %q, want %q", declared, got, declared)
 			}
-		})
-	}
+		}
+	})
 }

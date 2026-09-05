@@ -59,12 +59,17 @@ import "context"
 // instructions and the whole conversation with it. Placements nest, so the
 // bindings have to nest too.
 //
-// The name is a proxy for the agent, and an imperfect one: names are unique
+// The name alone is not enough to say WHOSE binding one is. Names are unique
 // only across SubAgents(), and a graph node's agent is not in SubAgents(), so
-// two distinct same-named agents can share one context chain. Readers go
-// through [PlacedMode] and [ModeFor], which drop a binding that contradicts the
-// reading agent's own declaration — a placement only ever supplies a default,
-// so for the agent it was resolved for the two always agree.
+// two distinct same-named agents can share one context chain and runner.New
+// will not reject the tree. The binding therefore also carries the *State of
+// the agent it was resolved for, and a reader whose own *State differs treats
+// it as someone else's and falls back to its own declaration.
+//
+// Identity has to be the *State rather than the agent.Agent: Reveal hands every
+// binder and every reader the same pointer for one agent, a pointer is always
+// comparable, and comparing two interface values would panic on an agent whose
+// dynamic type is not.
 
 // The two values agent/llmagent's IncludeContents constants carry. Duplicated
 // as untyped constants because llminternal cannot import llmagent, which
@@ -87,6 +92,14 @@ func ResolveMode(declared, byPlacement Mode) Mode {
 // disturb another's.
 type boundModeKey struct{ agent string }
 
+// binding is what a placement records: the mode, and the identity of the agent
+// it was resolved for. The name in the key scopes and nests the slot; the state
+// pointer says whose it is.
+type binding struct {
+	mode  Mode
+	state *State
+}
+
 // WithBoundMode returns ctx carrying the mode the named agent runs under for
 // this invocation. Set by whatever places the agent: the runner for a root
 // agent, an AgentNode for a graph node.
@@ -95,13 +108,12 @@ type boundModeKey struct{ agent string }
 // context, which is what a re-entrant placement of the same agent should do.
 // Binding a different agent leaves the first alone.
 //
-// The key is the name alone, so the binding is only as well-scoped as names are
-// unique within one context chain. runner.New rejects a duplicate name anywhere
-// in its agent tree and workflow.New rejects two nodes sharing one, but neither
-// covers a node agent's own descendants, so two distinct same-named agents
-// nested inside one placement would share a slot. Every other name-keyed lookup
-// in the framework — FindAgent, findAgentToRun, transfer targets — has the same
-// precondition.
+// state identifies the agent the mode was resolved for, and is what makes a
+// same-named agent nested inside this placement fall back to its own
+// declaration instead of inheriting this one. runner.New rejects a duplicate
+// name anywhere in its agent tree and workflow.New rejects two nodes sharing
+// one, but neither covers a node agent's own descendants — so the collision is
+// constructible, and the name in the key cannot resolve it on its own.
 //
 // An empty agentName is bound like any other. Config.Name is documented as
 // required and nothing here can supply a missing one, but skipping the binding
@@ -117,15 +129,16 @@ type boundModeKey struct{ agent string }
 // passes a ResolveMode whose fallback is concrete, so it is unreachable today.
 // There is deliberately no way to CLEAR a binding — a nested placement shadows
 // an outer one by binding its own value, and nothing needs to un-place an agent.
-func WithBoundMode(ctx context.Context, agentName string, mode Mode) context.Context {
+func WithBoundMode(ctx context.Context, agentName string, state *State, mode Mode) context.Context {
 	if mode == ModeUnset {
 		return ctx
 	}
-	return context.WithValue(ctx, boundModeKey{agent: agentName}, mode)
+	return context.WithValue(ctx, boundModeKey{agent: agentName}, binding{mode: mode, state: state})
 }
 
-// BoundMode reports the mode this invocation bound to agentName, and whether it
-// bound one at all. A binding made for a different agent does not count.
+// BoundMode reports the mode this invocation bound for the agent identified by
+// state, and whether it bound one at all. A binding made for a different agent
+// does not count, including one made for a DIFFERENT agent of the same name.
 //
 // Use this only to ask "did a placement put THIS agent in that mode" — a
 // declared mode is deliberately not consulted. Callers wanting the mode an
@@ -134,55 +147,25 @@ func WithBoundMode(ctx context.Context, agentName string, mode Mode) context.Con
 // ctx must be non-nil. Passing nil panics in ctx.Value, as it would for any
 // context helper, so callers holding a context that may be nil check it
 // themselves rather than relying on this.
-func BoundMode(ctx context.Context, agentName string) (Mode, bool) {
-	mode, ok := ctx.Value(boundModeKey{agent: agentName}).(Mode)
-	if !ok {
+func BoundMode(ctx context.Context, agentName string, state *State) (Mode, bool) {
+	b, ok := ctx.Value(boundModeKey{agent: agentName}).(binding)
+	if !ok || b.state != state {
 		return ModeUnset, false
 	}
-	return mode, true
+	return b.mode, true
 }
 
-// PlacedMode reports the mode a placement bound for agentName, and whether one
-// governs the agent that declares declared.
+// ModeFor returns the mode agentName runs under: the mode this invocation bound
+// for it, else its own declaration.
 //
-// A binding found under the name is not necessarily this agent's. The key is
-// the name, names are only unique across SubAgents(), and a graph node's agent
-// is not in SubAgents() — so an agent nested behind a node can share a name
-// with one that has a live binding, and runner.New will not reject the tree.
-//
-// A binding that CONTRADICTS an explicit declaration cannot have been resolved
-// for this agent: a placement only supplies a default, so every binder binds
-// ResolveMode(declared, placementDefault), which equals the declaration
-// whenever there is one. A disagreement therefore identifies the binding as
-// someone else's, and it is ignored. This does not rescue two same-named
-// agents that declare the SAME mode, or that both declare nothing — nothing
-// keyed by name can — but it does stop a placement resolved for one agent from
-// overriding another's explicit declaration.
-func PlacedMode(ctx context.Context, agentName string, declared Mode) (Mode, bool) {
-	m, ok := BoundMode(ctx, agentName)
-	if !ok {
-		return ModeUnset, false
-	}
-	if declared != ModeUnset && declared != m {
-		return ModeUnset, false
-	}
-	return m, true
-}
-
-// ModeFor returns the mode agentName runs under: its own declaration, else the
-// mode this invocation bound for it.
-//
-// The declaration is consulted first. For the agent a binding was actually
-// resolved for the two always agree, because a binder binds
-// ResolveMode(declared, placementDefault); they differ only when the binding
-// belongs to a same-named agent, and then the declaration is the right answer.
-// See [PlacedMode].
-func ModeFor(ctx context.Context, agentName string, declared Mode) Mode {
-	if declared != ModeUnset {
-		return declared
-	}
-	if m, ok := BoundMode(ctx, agentName); ok {
+// The binding is consulted first and is authoritative, because it is the only
+// thing that knows where the agent was placed. It is safe to prefer because
+// [BoundMode] has already established the binding was resolved for this exact
+// agent — for any other, including a same-named one, it reports nothing and the
+// declaration stands.
+func ModeFor(ctx context.Context, agentName string, state *State) Mode {
+	if m, ok := BoundMode(ctx, agentName, state); ok {
 		return m
 	}
-	return declared
+	return state.Mode
 }

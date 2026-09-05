@@ -237,7 +237,7 @@ func promptTokenEstimator(ctx agent.InvocationContext) compactioninternal.TokenC
 			ctx.Branch(),
 			ctx.IsolationScope(),
 			events,
-			ModeFor(ctx, ctx.Agent().Name(), state.Mode) == ModeSingleTurn,
+			ModeFor(ctx, ctx.Agent().Name(), state) == ModeSingleTurn,
 			ctx.UserContent(),
 		)
 		if err != nil {

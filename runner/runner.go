@@ -590,7 +590,7 @@ func (r *Runner) Run(ctx context.Context, userID, sessionID string, msg *genai.C
 			// placement that resolves a mode and then keeps it to itself,
 			// which is how a later reader would come to be right about graph
 			// nodes and wrong about roots.
-			ctx = llminternal.WithBoundMode(ctx, r.rootAgent.Name(), rootMode)
+			ctx = llminternal.WithBoundMode(ctx, r.rootAgent.Name(), llmInternalState, rootMode)
 
 			hasTaskSubAgent := func() bool {
 				for _, subAgent := range r.rootAgent.SubAgents() {

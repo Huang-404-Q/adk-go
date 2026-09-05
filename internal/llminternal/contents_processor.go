@@ -61,7 +61,7 @@ func ContentsRequestProcessor(ctx agent.InvocationContext, req *model.LLMRequest
 		//
 		// How to shape the turn also honours the declaration, since the
 		// single-turn nudge describes the agent rather than its placement.
-		boundMode, bound := PlacedMode(ctx, name, state.Mode)
+		boundMode, bound := BoundMode(ctx, name, state)
 		// Only "default" opts out of the placement. Testing for "" instead
 		// would let any unrecognised value opt out too, and IncludeContents is
 		// an unvalidated string, so a typo — "None", "defualt" — would hand a
@@ -73,7 +73,7 @@ func ContentsRequestProcessor(ctx agent.InvocationContext, req *model.LLMRequest
 		if state.IncludeContents == includeContentsNone || placementHidesHistory {
 			fn = buildContentsCurrentTurnContextOnly
 		}
-		isSingleTurn := ModeFor(ctx, name, state.Mode) == ModeSingleTurn
+		isSingleTurn := ModeFor(ctx, name, state) == ModeSingleTurn
 
 		// A compaction record instructs prompt assembly to drop a span of
 		// history and substitute content in its place. EventActions is

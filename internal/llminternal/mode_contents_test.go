@@ -19,6 +19,7 @@ import (
 
 	"google.golang.org/genai"
 
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	icontext "google.golang.org/adk/v2/internal/context"
 	"google.golang.org/adk/v2/internal/llminternal"
@@ -67,7 +68,7 @@ func TestContentsRequestProcessor_HonoursResolvedModeOverDeclaration(t *testing.
 			}))
 
 			ctx := icontext.NewInvocationContext(
-				llminternal.WithBoundMode(t.Context(), agentName, tc.resolved),
+				llminternal.WithBoundMode(t.Context(), agentName, stateOf(t, testAgent), tc.resolved),
 				icontext.InvocationContextParams{
 					Agent:   testAgent,
 					Session: &fakeSession{events: history},
@@ -112,7 +113,7 @@ func TestContentsRequestProcessor_BoundModeIsScopedToItsAgent(t *testing.T) {
 
 	// single_turn was resolved for "worker", not for the agent running here.
 	ctx := icontext.NewInvocationContext(
-		llminternal.WithBoundMode(t.Context(), "worker", llminternal.ModeSingleTurn),
+		llminternal.WithBoundMode(t.Context(), "worker", &llminternal.State{}, llminternal.ModeSingleTurn),
 		icontext.InvocationContextParams{Agent: testAgent, Session: &fakeSession{events: history}},
 	)
 
@@ -207,7 +208,7 @@ func TestContentsRequestProcessor_ResolvedSingleTurnGetsTheNudge(t *testing.T) {
 
 			stdCtx := t.Context()
 			if tc.bind {
-				stdCtx = llminternal.WithBoundMode(stdCtx, agentName, llminternal.ModeSingleTurn)
+				stdCtx = llminternal.WithBoundMode(stdCtx, agentName, stateOf(t, testAgent), llminternal.ModeSingleTurn)
 			}
 			ctx := icontext.NewInvocationContext(stdCtx, icontext.InvocationContextParams{
 				Agent:          testAgent,
@@ -244,9 +245,9 @@ func TestContentsRequestProcessor_ResolvedSingleTurnGetsTheNudge(t *testing.T) {
 // single_turn for. Its own declaration says it is conversational, so the
 // foreign placement must not take its history away.
 //
-// This is the direction in which the history gate's PlacedMode differs from a
-// bare BoundMode: without the contradiction guard, reverting the call site to
-// BoundMode leaves every other test in the suite green.
+// This was the direction that separated a name-only lookup from one that also
+// checks which agent the binding was resolved for: with the name alone, every
+// other test in the suite stayed green while this agent lost its history.
 func TestContentsRequestProcessor_AForeignSingleTurnBindingDoesNotHideAChatAgentsHistory(t *testing.T) {
 	// The agent's own reply sits between the two user turns, as above: a
 	// history ending on one pivots at index 0 and returns everything whether
@@ -263,9 +264,10 @@ func TestContentsRequestProcessor_AForeignSingleTurnBindingDoesNotHideAChatAgent
 	}))
 
 	// single_turn resolved for a DIFFERENT agent that happens to be called
-	// "worker" too — the collision runner.New does not reject.
+	// "worker" too — the collision runner.New does not reject. A distinct
+	// *State is exactly what makes it a different agent.
 	ctx := icontext.NewInvocationContext(
-		llminternal.WithBoundMode(t.Context(), "worker", llminternal.ModeSingleTurn),
+		llminternal.WithBoundMode(t.Context(), "worker", &llminternal.State{}, llminternal.ModeSingleTurn),
 		icontext.InvocationContextParams{Agent: testAgent, Session: &fakeSession{events: history}},
 	)
 
@@ -289,4 +291,16 @@ func TestContentsRequestProcessor_AForeignSingleTurnBindingDoesNotHideAChatAgent
 	if !sawHistory {
 		t.Errorf("a single_turn placement resolved for another agent hid this chat agent's history; contents = %v", req.Contents)
 	}
+}
+
+// stateOf returns the llminternal state behind an LlmAgent — the same pointer a
+// binder and a reader both see, and therefore the agent's identity as far as a
+// mode binding is concerned.
+func stateOf(t *testing.T, a agent.Agent) *llminternal.State {
+	t.Helper()
+	internal, ok := a.(llminternal.Agent)
+	if !ok {
+		t.Fatalf("agent %q is not an llminternal.Agent", a.Name())
+	}
+	return llminternal.Reveal(internal)
 }
