@@ -237,3 +237,56 @@ func TestContentsRequestProcessor_ResolvedSingleTurnGetsTheNudge(t *testing.T) {
 		})
 	}
 }
+
+// A binding found under this agent's name is not necessarily this agent's.
+// Names are unique only across SubAgents(), and a graph node's agent is not in
+// SubAgents(), so a chat agent can share a name with one a placement resolved
+// single_turn for. Its own declaration says it is conversational, so the
+// foreign placement must not take its history away.
+//
+// This is the direction in which the history gate's PlacedMode differs from a
+// bare BoundMode: without the contradiction guard, reverting the call site to
+// BoundMode leaves every other test in the suite green.
+func TestContentsRequestProcessor_AForeignSingleTurnBindingDoesNotHideAChatAgentsHistory(t *testing.T) {
+	// The agent's own reply sits between the two user turns, as above: a
+	// history ending on one pivots at index 0 and returns everything whether
+	// or not history is being hidden, which would make this vacuous.
+	history := []*session.Event{
+		{Author: "user", LLMResponse: model.LLMResponse{Content: genai.NewContentFromText("older turn", "user")}},
+		{Author: "worker", LLMResponse: model.LLMResponse{Content: genai.NewContentFromText("older answer", "model")}},
+		{Author: "user", LLMResponse: model.LLMResponse{Content: genai.NewContentFromText("current turn", "user")}},
+	}
+	testAgent := utils.Must(llmagent.New(llmagent.Config{
+		Name:  "worker",
+		Model: &testModel{},
+		Mode:  llmagent.ModeChat,
+	}))
+
+	// single_turn resolved for a DIFFERENT agent that happens to be called
+	// "worker" too — the collision runner.New does not reject.
+	ctx := icontext.NewInvocationContext(
+		llminternal.WithBoundMode(t.Context(), "worker", llminternal.ModeSingleTurn),
+		icontext.InvocationContextParams{Agent: testAgent, Session: &fakeSession{events: history}},
+	)
+
+	req := &model.LLMRequest{}
+	for _, err := range llminternal.ContentsRequestProcessor(ctx, req, &llminternal.Flow{}) {
+		if err != nil {
+			t.Fatalf("ContentsRequestProcessor: %v", err)
+		}
+	}
+	if len(req.Contents) == 0 {
+		t.Fatal("no contents were built, so this test pins nothing")
+	}
+	var sawHistory bool
+	for _, c := range req.Contents {
+		for _, p := range c.Parts {
+			if p != nil && p.Text == "older turn" {
+				sawHistory = true
+			}
+		}
+	}
+	if !sawHistory {
+		t.Errorf("a single_turn placement resolved for another agent hid this chat agent's history; contents = %v", req.Contents)
+	}
+}

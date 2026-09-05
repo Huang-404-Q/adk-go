@@ -734,10 +734,111 @@ func TestAgentNode_ASameNamedNestedAgentKeepsItsOwnDeclaration(t *testing.T) {
 		t.Fatal("the nested agent was never reached, so this test pins nothing")
 	}
 	si := innerLLM.systemInstruction()
+	// Both assertions below are absences, and systemInstruction returns "" when
+	// the request carries none — so without this the test would still pass if
+	// instruction assembly stopped running altogether.
+	if !strings.Contains(si, "INNER_INSTRUCTION") {
+		t.Fatalf("the agent's own instruction is missing, so the two absences below prove nothing; si = %q", si)
+	}
 	if strings.Contains(si, "You are an agent") {
 		t.Error("the nested single_turn agent got the identity preamble; it read the root's chat binding")
 	}
 	if strings.Contains(si, "transfer_to_agent") {
 		t.Error("the nested single_turn agent got transfer instructions; it read the root's chat binding")
+	}
+}
+
+// The companion to the test above, and the one that keeps the runner's root
+// bind honest. That bind is kept for uniformity on the argument that a chat
+// binding is indistinguishable from no binding — an argument this change has
+// already falsified once, for an agent that DECLARES a mode. The contradiction
+// guard cannot fire for an agent that declares nothing, so the argument has to
+// carry that case on its own, and nothing measured it.
+//
+// Same collision as above, except the nested same-named agent is undeclared. It
+// must come out identical to the same tree with the collision renamed away.
+func TestAgentNode_ASameNamedUndeclaredNestedAgentIsUnaffectedByTheRootBind(t *testing.T) {
+	t.Parallel()
+
+	run := func(t *testing.T, innerName string) string {
+		t.Helper()
+		innerLLM := &capturingLLM{}
+		peer, err := llmagent.New(llmagent.Config{Name: "peer", Model: &capturingLLM{}, Description: "a peer"})
+		if err != nil {
+			t.Fatalf("llmagent.New(peer): %v", err)
+		}
+		inner, err := llmagent.New(llmagent.Config{
+			Name:        innerName,
+			Model:       innerLLM,
+			Instruction: "INNER_INSTRUCTION",
+			SubAgents:   []agent.Agent{peer},
+		})
+		if err != nil {
+			t.Fatalf("llmagent.New(inner): %v", err)
+		}
+		seq, err := sequentialagent.New(sequentialagent.Config{
+			AgentConfig: agent.Config{Name: "seq", SubAgents: []agent.Agent{inner}},
+		})
+		if err != nil {
+			t.Fatalf("sequentialagent.New: %v", err)
+		}
+		node, err := workflow.NewAgentNode(seq, workflow.NodeConfig{})
+		if err != nil {
+			t.Fatalf("NewAgentNode: %v", err)
+		}
+		wf, err := workflowagent.New(workflowagent.Config{
+			Name:        "wf",
+			Description: "the workflow",
+			Edges:       []workflow.Edge{{From: workflow.Start, To: node}},
+		})
+		if err != nil {
+			t.Fatalf("workflowagent.New: %v", err)
+		}
+		root, err := llmagent.New(llmagent.Config{
+			Name: "coordinator",
+			Model: &testutil.MockModel{Responses: []*genai.Content{
+				genai.NewContentFromFunctionCall("transfer_to_agent",
+					map[string]any{"agent_name": "wf"}, "model"),
+				genai.NewContentFromText("done", "model"),
+			}},
+			SubAgents: []agent.Agent{wf},
+		})
+		if err != nil {
+			t.Fatalf("llmagent.New(root): %v", err)
+		}
+		r, err := runner.New(runner.Config{
+			AppName:           "app",
+			Agent:             root,
+			SessionService:    session.InMemoryService(),
+			AutoCreateSession: true,
+		})
+		if err != nil {
+			t.Fatalf("runner.New: %v", err)
+		}
+		msg := genai.NewContentFromText("please do the thing", genai.RoleUser)
+		for _, err := range r.Run(t.Context(), "u", "s1", msg, agent.RunConfig{}) {
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+		}
+		if innerLLM.got == nil {
+			t.Fatal("the nested agent was never reached, so this test pins nothing")
+		}
+		si := innerLLM.systemInstruction()
+		if !strings.Contains(si, "INNER_INSTRUCTION") {
+			t.Fatalf("the agent's own instruction is missing, so comparing the two runs proves nothing; si = %q", si)
+		}
+		return si
+	}
+
+	// The agent's own name is the variable being varied and it legitimately
+	// appears in the identity preamble, so compare with it substituted out.
+	// Everything else must match exactly.
+	const collidingName, distinctName = "coordinator", "inner-distinct"
+	colliding := strings.ReplaceAll(run(t, collidingName), collidingName, "NAME")
+	renamed := strings.ReplaceAll(run(t, distinctName), distinctName, "NAME")
+
+	if colliding != renamed {
+		t.Errorf("the root's binding changed what a same-named UNDECLARED agent sees.\n colliding = %q\n renamed   = %q", colliding, renamed)
 	}
 }

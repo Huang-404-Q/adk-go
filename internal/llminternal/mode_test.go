@@ -149,6 +149,7 @@ func TestPlacedMode(t *testing.T) {
 		want     Mode
 		wantOK   bool
 	}{
+		{"no binding, no declaration", ModeUnset, ModeUnset, ModeUnset, false},
 		{"no binding at all", ModeUnset, ModeSingleTurn, ModeUnset, false},
 		{"binding for an undeclared agent governs it", ModeSingleTurn, ModeUnset, ModeSingleTurn, true},
 		{"binding agreeing with the declaration governs it", ModeSingleTurn, ModeSingleTurn, ModeSingleTurn, true},
