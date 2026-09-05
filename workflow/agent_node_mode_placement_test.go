@@ -24,10 +24,14 @@ import (
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/agent/workflowagent"
+	"google.golang.org/adk/v2/agent/workflowagents/sequentialagent"
 	"google.golang.org/adk/v2/internal/agent/parentmap"
 	"google.golang.org/adk/v2/internal/agent/runconfig"
 	icontext "google.golang.org/adk/v2/internal/context"
+	"google.golang.org/adk/v2/internal/testutil"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/workflow"
 )
@@ -646,5 +650,94 @@ func TestAgentNode_Run_AcceptsAToolContext(t *testing.T) {
 	}
 	if got == 0 {
 		t.Error("node.Run over a tool context produced no events")
+	}
+}
+
+// The mode binding is keyed by agent NAME, and names are only unique across
+// SubAgents(). A graph node's agent is not in SubAgents(), so a nested agent
+// can share a name with one that already holds a binding, and runner.New does
+// not reject the tree.
+//
+// Here a chat root named "coordinator" transfers to a workflow whose node wraps
+// a SequentialAgent — a composite, so the node binds nothing — whose child is a
+// DIFFERENT agent, also named "coordinator", declaring single_turn. That child
+// must still run single_turn. Before PlacedMode it read the root's chat binding
+// and was handed the identity preamble and transfer instructions the merge base
+// correctly withheld.
+func TestAgentNode_ASameNamedNestedAgentKeepsItsOwnDeclaration(t *testing.T) {
+	t.Parallel()
+
+	innerLLM := &capturingLLM{}
+	peer, err := llmagent.New(llmagent.Config{Name: "peer", Model: &capturingLLM{}, Description: "a peer"})
+	if err != nil {
+		t.Fatalf("llmagent.New(peer): %v", err)
+	}
+	// Same name as the root, declaring the mode the root's binding would override.
+	inner, err := llmagent.New(llmagent.Config{
+		Name:        "coordinator",
+		Model:       innerLLM,
+		Mode:        llmagent.ModeSingleTurn,
+		Instruction: "INNER_INSTRUCTION",
+		SubAgents:   []agent.Agent{peer},
+	})
+	if err != nil {
+		t.Fatalf("llmagent.New(inner): %v", err)
+	}
+	seq, err := sequentialagent.New(sequentialagent.Config{
+		AgentConfig: agent.Config{Name: "seq", SubAgents: []agent.Agent{inner}},
+	})
+	if err != nil {
+		t.Fatalf("sequentialagent.New: %v", err)
+	}
+	node, err := workflow.NewAgentNode(seq, workflow.NodeConfig{})
+	if err != nil {
+		t.Fatalf("NewAgentNode: %v", err)
+	}
+	wf, err := workflowagent.New(workflowagent.Config{
+		Name:        "wf",
+		Description: "the workflow",
+		Edges:       []workflow.Edge{{From: workflow.Start, To: node}},
+	})
+	if err != nil {
+		t.Fatalf("workflowagent.New: %v", err)
+	}
+	root, err := llmagent.New(llmagent.Config{
+		Name: "coordinator",
+		Model: &testutil.MockModel{Responses: []*genai.Content{
+			genai.NewContentFromFunctionCall("transfer_to_agent",
+				map[string]any{"agent_name": "wf"}, "model"),
+			genai.NewContentFromText("done", "model"),
+		}},
+		SubAgents: []agent.Agent{wf},
+	})
+	if err != nil {
+		t.Fatalf("llmagent.New(root): %v", err)
+	}
+
+	r, err := runner.New(runner.Config{
+		AppName:           "app",
+		Agent:             root,
+		SessionService:    session.InMemoryService(),
+		AutoCreateSession: true,
+	})
+	if err != nil {
+		t.Fatalf("runner.New rejected two same-named agents; the collision this pins is gone: %v", err)
+	}
+	msg := genai.NewContentFromText("please do the thing", genai.RoleUser)
+	for _, err := range r.Run(t.Context(), "u", "s1", msg, agent.RunConfig{}) {
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	}
+
+	if innerLLM.got == nil {
+		t.Fatal("the nested agent was never reached, so this test pins nothing")
+	}
+	si := innerLLM.systemInstruction()
+	if strings.Contains(si, "You are an agent") {
+		t.Error("the nested single_turn agent got the identity preamble; it read the root's chat binding")
+	}
+	if strings.Contains(si, "transfer_to_agent") {
+		t.Error("the nested single_turn agent got transfer instructions; it read the root's chat binding")
 	}
 }

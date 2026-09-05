@@ -113,9 +113,9 @@ func TestBoundMode_Scoping(t *testing.T) {
 func TestModeFor(t *testing.T) {
 	t.Parallel()
 
-	t.Run("the binding wins over the declaration", func(t *testing.T) {
+	t.Run("the binding supplies a mode the agent did not declare", func(t *testing.T) {
 		ctx := WithBoundMode(t.Context(), "worker", ModeSingleTurn)
-		if got := ModeFor(ctx, "worker", ModeChat); got != ModeSingleTurn {
+		if got := ModeFor(ctx, "worker", ModeUnset); got != ModeSingleTurn {
 			t.Errorf("ModeFor = %q, want %q", got, ModeSingleTurn)
 		}
 	})
@@ -125,4 +125,43 @@ func TestModeFor(t *testing.T) {
 			t.Errorf("ModeFor with no binding = %q, want %q", got, ModeChat)
 		}
 	})
+
+	// A binder binds ResolveMode(declared, placementDefault), so for the agent
+	// a binding was resolved for it always equals the declaration. A binding
+	// that contradicts one therefore belongs to a same-named agent, and the
+	// declaration is the right answer. Without this, a chat root placed a
+	// same-named nested single_turn agent into chat.
+	t.Run("a contradicting binding is another agent's and loses", func(t *testing.T) {
+		ctx := WithBoundMode(t.Context(), "worker", ModeChat)
+		if got := ModeFor(ctx, "worker", ModeSingleTurn); got != ModeSingleTurn {
+			t.Errorf("ModeFor = %q, want the declaration %q", got, ModeSingleTurn)
+		}
+	})
+}
+
+func TestPlacedMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		bind     Mode // ModeUnset means "bind nothing"
+		declared Mode
+		want     Mode
+		wantOK   bool
+	}{
+		{"no binding at all", ModeUnset, ModeSingleTurn, ModeUnset, false},
+		{"binding for an undeclared agent governs it", ModeSingleTurn, ModeUnset, ModeSingleTurn, true},
+		{"binding agreeing with the declaration governs it", ModeSingleTurn, ModeSingleTurn, ModeSingleTurn, true},
+		{"binding contradicting the declaration is another agent's", ModeChat, ModeSingleTurn, ModeUnset, false},
+		{"single_turn binding contradicting a chat declaration is another agent's", ModeSingleTurn, ModeChat, ModeUnset, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithBoundMode(t.Context(), "worker", tt.bind)
+			got, ok := PlacedMode(ctx, "worker", tt.declared)
+			if got != tt.want || ok != tt.wantOK {
+				t.Errorf("PlacedMode = (%q, %v), want (%q, %v)", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
 }

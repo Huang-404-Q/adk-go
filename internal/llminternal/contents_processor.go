@@ -61,7 +61,7 @@ func ContentsRequestProcessor(ctx agent.InvocationContext, req *model.LLMRequest
 		//
 		// How to shape the turn also honours the declaration, since the
 		// single-turn nudge describes the agent rather than its placement.
-		boundMode, bound := BoundMode(ctx, name)
+		boundMode, bound := PlacedMode(ctx, name, state.Mode)
 		// Only "default" opts out of the placement. Testing for "" instead
 		// would let any unrecognised value opt out too, and IncludeContents is
 		// an unvalidated string, so a typo — "None", "defualt" — would hand a

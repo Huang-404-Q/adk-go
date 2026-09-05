@@ -38,19 +38,21 @@ import (
 
 // RunLLMAgentAsNode runs an LlmAgent as a workflow node.
 //
-// The mode is the one this invocation bound for the agent, else the agent's own
-// declaration, else chat. An out-of-module caller cannot bind — only the runner,
-// the workflow engine, and this function once it has resolved — so an agent that
-// declares nothing runs chat here,
-// where it ran single_turn before the placement was made per-invocation.
+// The mode is the agent's own declaration, else the one this invocation bound
+// for it, else chat. An out-of-module caller cannot bind — only the runner, the
+// workflow engine, and this function once it has resolved — so an agent that
+// declares nothing runs chat here, where it ran single_turn before the
+// placement was made per-invocation.
 //
 // Per-mode behaviour:
 //
 //   - single_turn: the wrapper binds the mode to the agent for this
 //     invocation, so the contents processor scopes history to the
-//     current turn. It seeds the agent with a single user-content event
-//     derived from nodeInput, drives one Agent.Run, post-processes the
-//     model reply into the terminal Output, then returns.
+//     current turn — unless the agent explicitly set IncludeContents to
+//     IncludeContentsDefault, which keeps the history. It seeds the agent
+//     with a single user-content event derived from nodeInput, drives one
+//     Agent.Run, post-processes the model reply into the terminal Output,
+//     then returns.
 //   - task: the wrapper drives Agent.Run and watches for the
 //     finish_task FunctionCall; once the matching FinishTaskTool
 //     FunctionResponse signals success, the wrapper promotes the FC
@@ -164,10 +166,10 @@ func RunLLMAgentAsNode(a agent.Agent, ctx agent.Context, nodeInput any) iter.Seq
 // PrepareLLMAgentInput returns the seeded user-role event for the
 // single_turn agent's first turn, and nil for any other agent.
 //
-// Which agents count as single_turn is decided per invocation: the mode ctx
-// bound for a, else a's own declaration. Binding is internal — the runner, the
-// workflow engine, and RunLLMAgentAsNode once it has resolved — so an
-// out-of-module caller gets a seed whenever a declares single_turn, and
+// Which agents count as single_turn is decided per invocation: a's own
+// declaration, else the mode ctx bound for it. Binding is internal — the
+// runner, the workflow engine, and RunLLMAgentAsNode once it has resolved — so
+// an out-of-module caller gets a seed whenever a declares single_turn, and
 // whenever it is called with a ctx from inside a placement that bound it,
 // which a callback or tool running under a graph node holds.
 func PrepareLLMAgentInput(a agent.Agent, ctx agent.InvocationContext, nodeInput any) *session.Event {

@@ -1293,8 +1293,9 @@ func fcContent(id, name string, args map[string]any) *genai.Content {
 func TestRunLLMAgentAsNode_SingleTurnAcceptsAToolContext(t *testing.T) {
 	t.Parallel()
 
+	llm := &recordingLLM{}
 	a := makeLLMAgent(t, "worker", withMode(llmagent.ModeSingleTurn),
-		func(c *llmagent.Config) { c.Model = &recordingLLM{} })
+		func(c *llmagent.Config) { c.Model = llm })
 
 	svc := session.InMemoryService()
 	resp, err := svc.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "u"})
@@ -1309,10 +1310,16 @@ func TestRunLLMAgentAsNode_SingleTurnAcceptsAToolContext(t *testing.T) {
 	})
 	toolCtx := agent.NewToolContext(ic, "fc-1", &session.EventActions{}, nil)
 
-	// The assertion is that this drains rather than panicking.
 	for _, err := range llmagent.RunLLMAgentAsNode(a, toolCtx, nil) {
 		if err != nil {
 			t.Fatalf("RunLLMAgentAsNode: %v", err)
 		}
+	}
+	// Not panicking is most of the point, but a branch that quietly stopped
+	// running the agent would satisfy that too. A tool context reports no
+	// session and no run config, so an early bail on either is the plausible
+	// regression, and only reaching the model rules it out.
+	if llm.got == nil {
+		t.Error("the model was never called; the single_turn branch did not run the agent")
 	}
 }

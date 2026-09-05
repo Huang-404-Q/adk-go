@@ -58,6 +58,13 @@ import "context"
 // context and fell back to chat, taking the identity preamble, the transfer
 // instructions and the whole conversation with it. Placements nest, so the
 // bindings have to nest too.
+//
+// The name is a proxy for the agent, and an imperfect one: names are unique
+// only across SubAgents(), and a graph node's agent is not in SubAgents(), so
+// two distinct same-named agents can share one context chain. Readers go
+// through [PlacedMode] and [ModeFor], which drop a binding that contradicts the
+// reading agent's own declaration — a placement only ever supplies a default,
+// so for the agent it was resolved for the two always agree.
 
 // The two values agent/llmagent's IncludeContents constants carry. Duplicated
 // as untyped constants because llminternal cannot import llmagent, which
@@ -135,9 +142,45 @@ func BoundMode(ctx context.Context, agentName string) (Mode, bool) {
 	return mode, true
 }
 
-// ModeFor returns the mode agentName runs under: the mode this invocation bound
-// to it, else its own declaration.
+// PlacedMode reports the mode a placement bound for agentName, and whether one
+// governs the agent that declares declared.
+//
+// A binding found under the name is not necessarily this agent's. The key is
+// the name, names are only unique across SubAgents(), and a graph node's agent
+// is not in SubAgents() — so an agent nested behind a node can share a name
+// with one that has a live binding, and runner.New will not reject the tree.
+//
+// A binding that CONTRADICTS an explicit declaration cannot have been resolved
+// for this agent: a placement only supplies a default, so every binder binds
+// ResolveMode(declared, placementDefault), which equals the declaration
+// whenever there is one. A disagreement therefore identifies the binding as
+// someone else's, and it is ignored. This does not rescue two same-named
+// agents that declare the SAME mode, or that both declare nothing — nothing
+// keyed by name can — but it does stop a placement resolved for one agent from
+// overriding another's explicit declaration.
+func PlacedMode(ctx context.Context, agentName string, declared Mode) (Mode, bool) {
+	m, ok := BoundMode(ctx, agentName)
+	if !ok {
+		return ModeUnset, false
+	}
+	if declared != ModeUnset && declared != m {
+		return ModeUnset, false
+	}
+	return m, true
+}
+
+// ModeFor returns the mode agentName runs under: its own declaration, else the
+// mode this invocation bound for it.
+//
+// The declaration is consulted first. For the agent a binding was actually
+// resolved for the two always agree, because a binder binds
+// ResolveMode(declared, placementDefault); they differ only when the binding
+// belongs to a same-named agent, and then the declaration is the right answer.
+// See [PlacedMode].
 func ModeFor(ctx context.Context, agentName string, declared Mode) Mode {
+	if declared != ModeUnset {
+		return declared
+	}
 	if m, ok := BoundMode(ctx, agentName); ok {
 		return m
 	}
