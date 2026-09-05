@@ -180,12 +180,38 @@ func TestModeFor(t *testing.T) {
 	// into single_turn.
 	t.Run("another agent's binding loses to this agent's declaration", func(t *testing.T) {
 		placed := &State{}
-		for _, declared := range []Mode{ModeUnset, ModeChat, ModeSingleTurn, ModeTask} {
-			nested := &State{Mode: declared}
-			ctx := WithBoundMode(t.Context(), "worker", placed, ModeSingleTurn)
-			if got := ModeFor(ctx, "worker", nested); got != declared {
-				t.Errorf("ModeFor with declared %q = %q, want %q", declared, got, declared)
+		// Each arm binds a mode the nested agent did NOT declare, so an arm
+		// cannot pass merely because the two happen to coincide.
+		for _, tc := range []struct{ declared, bound Mode }{
+			{ModeUnset, ModeSingleTurn},
+			{ModeChat, ModeSingleTurn},
+			{ModeSingleTurn, ModeTask},
+			{ModeTask, ModeSingleTurn},
+		} {
+			nested := &State{Mode: tc.declared}
+			ctx := WithBoundMode(t.Context(), "worker", placed, tc.bound)
+			if got := ModeFor(ctx, "worker", nested); got != tc.declared {
+				t.Errorf("ModeFor with declared %q and another agent bound %q = %q, want %q",
+					tc.declared, tc.bound, got, tc.declared)
 			}
+		}
+	})
+
+	// A placement resolved for one agent must not be DESTROYED by a placement
+	// for a different agent of the same name either. Identity in the context
+	// key gives them separate slots; with identity only in the value, the
+	// second bind replaced the first and its owner silently fell back to its
+	// declaration.
+	t.Run("a same-named agent's binding does not displace ours", func(t *testing.T) {
+		ours, theirs := &State{}, &State{}
+		ctx := WithBoundMode(t.Context(), "worker", ours, ModeSingleTurn)
+		ctx = WithBoundMode(ctx, "worker", theirs, ModeTask)
+
+		if got, ok := BoundMode(ctx, "worker", ours); !ok || got != ModeSingleTurn {
+			t.Errorf("BoundMode(ours) = (%q, %v), want (%q, true)", got, ok, ModeSingleTurn)
+		}
+		if got, ok := BoundMode(ctx, "worker", theirs); !ok || got != ModeTask {
+			t.Errorf("BoundMode(theirs) = (%q, %v), want (%q, true)", got, ok, ModeTask)
 		}
 	})
 }

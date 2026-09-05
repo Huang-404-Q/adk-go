@@ -111,9 +111,11 @@ func TestContentsRequestProcessor_BoundModeIsScopedToItsAgent(t *testing.T) {
 	}
 	testAgent := utils.Must(llmagent.New(llmagent.Config{Name: "other", Model: &testModel{}}))
 
-	// single_turn was resolved for "worker", not for the agent running here.
+	// single_turn was resolved under the name "worker", not the name of the
+	// agent running here. The IDENTITY is this agent's, so the name is the only
+	// thing that differs and the only thing this test can be passing on.
 	ctx := icontext.NewInvocationContext(
-		llminternal.WithBoundMode(t.Context(), "worker", &llminternal.State{}, llminternal.ModeSingleTurn),
+		llminternal.WithBoundMode(t.Context(), "worker", stateOf(t, testAgent), llminternal.ModeSingleTurn),
 		icontext.InvocationContextParams{Agent: testAgent, Session: &fakeSession{events: history}},
 	)
 

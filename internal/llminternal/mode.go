@@ -62,14 +62,14 @@ import "context"
 // The name alone is not enough to say WHOSE binding one is. Names are unique
 // only across SubAgents(), and a graph node's agent is not in SubAgents(), so
 // two distinct same-named agents can share one context chain and runner.New
-// will not reject the tree. The binding therefore also carries the *State of
-// the agent it was resolved for, and a reader whose own *State differs treats
-// it as someone else's and falls back to its own declaration.
+// will not reject the tree. The agent's identity is therefore part of the
+// context key, so each gets a slot of its own: a reader never sees another
+// agent's placement, and never loses its own to one.
 //
 // Identity has to be the *State rather than the agent.Agent: Reveal hands every
 // binder and every reader the same pointer for one agent, a pointer is always
-// comparable, and comparing two interface values would panic on an agent whose
-// dynamic type is not.
+// comparable, and an agent.Agent in a context key would panic on an
+// implementation whose dynamic type is not.
 
 // The two values agent/llmagent's IncludeContents constants carry. Duplicated
 // as untyped constants because llminternal cannot import llmagent, which
@@ -87,16 +87,21 @@ func ResolveMode(declared, byPlacement Mode) Mode {
 	return declared
 }
 
-// boundModeKey is the context key for one agent's binding. The agent name is
-// part of the key, so each agent gets its own slot and binding one cannot
-// disturb another's.
-type boundModeKey struct{ agent string }
-
-// binding is what a placement records: the mode, and the identity of the agent
-// it was resolved for. The name in the key scopes and nests the slot; the state
-// pointer says whose it is.
-type binding struct {
-	mode  Mode
+// boundModeKey is the context key for one agent's binding. BOTH the name and
+// the agent's identity are part of the key, and each does a different job.
+//
+// Identity keeps a binding from reaching an agent it was not resolved for, and
+// keeps a placement resolved for one agent from being destroyed by a placement
+// for a same-named other: the two occupy different slots rather than one
+// overwriting the other. Putting identity only in the VALUE gave the first
+// property and not the second — the second bind still replaced the first in the
+// lookup chain, and the reader then rejected it, so the agent that owned it
+// silently lost its placement.
+//
+// The name keeps the slot per-agent even so, which is what makes re-binding the
+// SAME agent shadow its outer binding rather than sit beside it.
+type boundModeKey struct {
+	agent string
 	state *State
 }
 
@@ -133,7 +138,7 @@ func WithBoundMode(ctx context.Context, agentName string, state *State, mode Mod
 	if mode == ModeUnset {
 		return ctx
 	}
-	return context.WithValue(ctx, boundModeKey{agent: agentName}, binding{mode: mode, state: state})
+	return context.WithValue(ctx, boundModeKey{agent: agentName, state: state}, mode)
 }
 
 // BoundMode reports the mode this invocation bound for the agent identified by
@@ -148,11 +153,11 @@ func WithBoundMode(ctx context.Context, agentName string, state *State, mode Mod
 // context helper, so callers holding a context that may be nil check it
 // themselves rather than relying on this.
 func BoundMode(ctx context.Context, agentName string, state *State) (Mode, bool) {
-	b, ok := ctx.Value(boundModeKey{agent: agentName}).(binding)
-	if !ok || b.state != state {
+	mode, ok := ctx.Value(boundModeKey{agent: agentName, state: state}).(Mode)
+	if !ok {
 		return ModeUnset, false
 	}
-	return b.mode, true
+	return mode, true
 }
 
 // ModeFor returns the mode agentName runs under: the mode this invocation bound

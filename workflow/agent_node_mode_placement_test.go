@@ -751,10 +751,13 @@ func TestAgentNode_ASameNamedNestedAgentKeepsItsOwnDeclaration(t *testing.T) {
 
 // The companion to the test above, and the one that keeps the runner's root
 // bind honest. That bind is kept for uniformity on the argument that a chat
-// binding is indistinguishable from no binding — an argument this change has
-// already falsified once, for an agent that DECLARES a mode. The contradiction
-// guard cannot fire for an agent that declares nothing, so the argument has to
-// carry that case on its own, and nothing measured it.
+// binding is indistinguishable from no binding.
+//
+// Note what this does and does not establish. It fails if the root binds a mode
+// readers DO distinguish, so it guards against a future reader learning to tell
+// chat from unset. It does NOT fail if the root bind is deleted, because for an
+// undeclared agent chat and absent are the same answer everywhere — so it is a
+// guard, not corroboration that the bind is inert.
 //
 // Same collision as above, except the nested same-named agent is undeclared. It
 // must come out identical to the same tree with the collision renamed away.
