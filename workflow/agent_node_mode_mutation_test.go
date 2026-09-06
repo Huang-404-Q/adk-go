@@ -265,9 +265,10 @@ func (m *raceFreeLLM) GenerateContent(context.Context, *model.LLMRequest, bool) 
 // the run path, where it raced the contents processor's read. Run with -race.
 //
 // Scope, because "one instance, concurrent invocations" sounds broader than
-// what this races. The agent has no Tools and no Toolsets, so a run never
-// enters the tool processor, whose append onto the agent's own Tools slice is a
-// separate shared-state hazard this change does not touch. Every goroutine gets
+// what this races. The agent has no Tools and no Toolsets, so although every
+// run does enter the tool processor, it appends nothing there — and that
+// append onto the agent's own Tools slice is a separate shared-state hazard
+// this change does not touch, so it stays unexercised here. Every goroutine gets
 // its own node, workflow and session, so the only objects shared are the agent
 // and the model. And all sixteen placements are the same one — an instance
 // under a runner-root chat placement and a graph-node single_turn placement at
@@ -447,11 +448,12 @@ func TestAgentNode_Run_DoesNotMutateTheAgentsIncludeContents(t *testing.T) {
 // The whole change, in the shape a user meets it: one placement must not decide
 // what the agent is for every placement after it.
 //
-// An undeclared agent is run at a graph node, then the SAME instance is used as
-// a runner root. On the merge base the node run stamped it — Mode became
-// single_turn and IncludeContents became "none", permanently, on the object —
-// so the runner then rejected it with "root agent %q must be a chat LlmAgent,
-// but has mode single_turn". Measured both ways: the base errors, this runs.
+// An undeclared agent is wrapped in a graph node and run, then the SAME instance
+// is used as a runner root. On the merge base those were two separate writes:
+// NewAgentNode stamped Mode=single_turn at construction, and the run then
+// stamped IncludeContents=none. Both were permanent, on the object, so the
+// runner rejected it with "root agent worker must be a chat LlmAgent, but has
+// mode single_turn". Measured both ways: the base errors, this runs.
 //
 // The individual writes are pinned field by field elsewhere. This pins the
 // consequence, which is the thing the PR description promises and the only
@@ -459,8 +461,9 @@ func TestAgentNode_Run_DoesNotMutateTheAgentsIncludeContents(t *testing.T) {
 func TestOneInstance_ANodeRunDoesNotDecideItsNextPlacement(t *testing.T) {
 	t.Parallel()
 
+	llm := &raceFreeLLM{}
 	a, err := llmagent.New(llmagent.Config{
-		Name: "worker", Description: "w", Model: &raceFreeLLM{}, Instruction: "OWN",
+		Name: "worker", Description: "w", Model: llm, Instruction: "OWN",
 	})
 	if err != nil {
 		t.Fatalf("llmagent.New: %v", err)
@@ -477,7 +480,13 @@ func TestOneInstance_ANodeRunDoesNotDecideItsNextPlacement(t *testing.T) {
 		}
 	}
 
-	// Nothing the run did may be visible on the agent itself.
+	// Guard against a vacuous pass: if nothing ran, the absences below prove
+	// nothing. Every sibling in this file carries the same check.
+	if llm.calls.Load() == 0 {
+		t.Fatal("the model was never called, so the node run did not happen")
+	}
+
+	// Nothing the construction or the run did may be visible on the agent.
 	state := llminternal.Reveal(a.(llminternal.Agent))
 	if state.Mode != llminternal.ModeUnset {
 		t.Errorf("Mode after a node run = %q, want unset", state.Mode)

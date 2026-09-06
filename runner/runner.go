@@ -591,12 +591,11 @@ func (r *Runner) Run(ctx context.Context, userID, sessionID string, msg *genai.C
 			// which is how a later reader would come to be right about graph
 			// nodes and wrong about roots.
 			//
-			// Kept in a local rather than assigned back to ctx, which is this
-			// closure's captured parameter. Re-deriving the binding on a second
-			// range would be harmless in itself — same key, same value — but
-			// the sibling branch below already assigns four wrappers back onto
-			// ctx, so this iterator is stateful for a re-range whatever this
-			// line does. Not adding a fifth is the whole claim.
+			// Kept in a local rather than assigned back to ctx, this closure's
+			// captured parameter, so ranging the returned iterator twice cannot
+			// accumulate wrappers. The non-LlmAgent path below does assign back,
+			// but this branch returns before reaching it, so on this path the
+			// iterator really is clean for a re-range.
 			rootCtx := llminternal.WithBoundMode(ctx, r.rootAgent.Name(), llmInternalState, rootMode)
 
 			hasTaskSubAgent := func() bool {
