@@ -590,7 +590,12 @@ func (r *Runner) Run(ctx context.Context, userID, sessionID string, msg *genai.C
 			// placement that resolves a mode and then keeps it to itself,
 			// which is how a later reader would come to be right about graph
 			// nodes and wrong about roots.
-			ctx = llminternal.WithBoundMode(ctx, r.rootAgent.Name(), llmInternalState, rootMode)
+			//
+			// Kept in a local rather than assigned back to ctx: ctx is this
+			// closure's captured parameter, and this branch is the only writer of
+			// it, so writing it would make the returned iterator stateful for a
+			// caller that ranges it twice.
+			rootCtx := llminternal.WithBoundMode(ctx, r.rootAgent.Name(), llmInternalState, rootMode)
 
 			hasTaskSubAgent := func() bool {
 				for _, subAgent := range r.rootAgent.SubAgents() {
@@ -620,7 +625,7 @@ func (r *Runner) Run(ctx context.Context, userID, sessionID string, msg *genai.C
 				}
 			}
 
-			r.runNode(ctx, storedSession, agentToRun, msg, cfg, options, yield)
+			r.runNode(rootCtx, storedSession, agentToRun, msg, cfg, options, yield)
 			return
 		}
 

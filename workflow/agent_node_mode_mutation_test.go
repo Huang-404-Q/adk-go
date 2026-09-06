@@ -54,6 +54,15 @@ func coordinatorToolNames(t *testing.T, a agent.Agent) []string {
 	return names
 }
 
+func declaredIncludeContents(t *testing.T, a agent.Agent) string {
+	t.Helper()
+	llmA, ok := a.(llminternal.Agent)
+	if !ok {
+		t.Fatalf("agent %q is not an LlmAgent", a.Name())
+	}
+	return llminternal.Reveal(llmA).IncludeContents
+}
+
 func declaredMode(t *testing.T, a agent.Agent) llminternal.Mode {
 	t.Helper()
 	llmA, ok := a.(llminternal.Agent)
@@ -423,5 +432,50 @@ func TestLlmAgent_TransferTargets_AreConstructionOrderIndependent(t *testing.T) 
 	}
 	if coordFirst != nodeFirst {
 		t.Errorf("the coordinator's transfer targets depend on construction order:\n coordinator-first = %q\n node-first        = %q", coordFirst, nodeFirst)
+	}
+}
+
+// CONTRACT 1 covers State.IncludeContents as well as State.Mode, and until now
+// only the Mode half was asserted. The wrapper used to write
+// state.IncludeContents = "none" onto the shared agent when it ran a
+// single_turn placement, which is why a second placement of the same instance
+// then hid history everywhere. A guarded reintroduction of that write —
+// only when the field is still empty — changes no behaviour the history tests
+// observe, because they set IncludeContents explicitly, so nothing but this
+// assertion or the race detector would catch it.
+func TestAgentNode_Run_DoesNotMutateTheAgentsIncludeContents(t *testing.T) {
+	t.Parallel()
+
+	llm := &capturingLLM{}
+	a, err := llmagent.New(llmagent.Config{Name: "worker", Model: llm})
+	if err != nil {
+		t.Fatalf("llmagent.New: %v", err)
+	}
+	if got := declaredIncludeContents(t, a); got != "" {
+		t.Fatalf("precondition: IncludeContents = %q, want empty", got)
+	}
+
+	node, err := workflow.NewAgentNode(a, workflow.NodeConfig{})
+	if err != nil {
+		t.Fatalf("NewAgentNode: %v", err)
+	}
+	wf, err := workflow.New("wf", []workflow.Edge{{From: workflow.Start, To: node}})
+	if err != nil {
+		t.Fatalf("workflow.New: %v", err)
+	}
+	for _, err := range wf.Run(newModeTestCtx(t, a)) {
+		if err != nil {
+			t.Fatalf("wf.Run: %v", err)
+		}
+	}
+	if llm.got == nil {
+		t.Fatal("the model was never called, so the single_turn placement was not exercised")
+	}
+
+	if got := declaredIncludeContents(t, a); got != "" {
+		t.Errorf("IncludeContents after a single_turn placement = %q, want empty (a run must not mutate the agent)", got)
+	}
+	if got := declaredMode(t, a); got != llminternal.ModeUnset {
+		t.Errorf("declared mode after a single_turn placement = %q, want unset", got)
 	}
 }
