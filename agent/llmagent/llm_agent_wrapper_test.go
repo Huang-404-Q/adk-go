@@ -696,8 +696,10 @@ func TestRunLLMAgentAsNode_UnsupportedMode_Errors(t *testing.T) {
 }
 
 // Resolving the mode reads ctx, so an exported entry point has to reject a nil
-// one rather than dereference it. The merge base reached its mode check without
-// touching ctx, so a caller passing nil got an error there and must still.
+// one rather than dereference it. This agent declares single_turn, so on the
+// merge base it passed the mode check and then panicked at ctx.UserContent().
+// An error is better than either. (The bogus-mode test above is the case where
+// the base did error at the check.)
 func TestRunLLMAgentAsNode_NilContext_Errors(t *testing.T) {
 	t.Parallel()
 	a := makeLLMAgent(t, "x", withMode(llmagent.ModeSingleTurn))

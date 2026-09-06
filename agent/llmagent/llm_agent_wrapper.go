@@ -58,7 +58,9 @@ import (
 //     FunctionResponse signals success, the wrapper promotes the FC
 //     args (or the wrapped value) as the terminal Output and returns.
 //     Non-success FRs let the LLM see the validation error and retry.
-//   - chat: the wrapper runs an outer dispatch loop. Before re-entering
+//   - chat: nodeInput is ignored — runChat is driven from the session, so a
+//     caller whose nodeInput is not also in the session sees it dropped. The
+//     wrapper runs an outer dispatch loop. Before re-entering
 //     Agent.Run on each iteration it scans the session for unresolved
 //     task delegations (task FCs from this coordinator without a
 //     matching FR), dispatches each via workflow.RunNode under a

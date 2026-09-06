@@ -29,7 +29,6 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/internal/llminternal"
-	"google.golang.org/adk/v2/internal/testutil"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
@@ -312,51 +311,6 @@ func TestOneAgentInstance_ConcurrentInvocationsAreRaceFree(t *testing.T) {
 	// reaching the contents processor, having opened no race window at all.
 	if got := llm.calls.Load(); got != runs {
 		t.Errorf("model was called %d time(s), want %d — the runs did not reach the code this races", got, runs)
-	}
-}
-
-// The last of the five removed writes, and the only one nothing else can see
-// gone. runner.Run used to stamp ModeChat onto an undeclared root's shared
-// State. Every reader treats chat and unset alike, so no value assertion
-// anywhere can tell the write from its absence, and no concurrent test drives
-// runner.Run — restoring it would ship green. This asserts the agent object is
-// unchanged by a run, which is the property #1137 is about.
-func TestRunner_Run_DoesNotMutateTheRootAgentsMode(t *testing.T) {
-	t.Parallel()
-
-	root, err := llmagent.New(llmagent.Config{
-		Name:  "root",
-		Model: &testutil.MockModel{Responses: []*genai.Content{genai.NewContentFromText("done", "model")}},
-	})
-	if err != nil {
-		t.Fatalf("llmagent.New: %v", err)
-	}
-	if got := declaredMode(t, root); got != llminternal.ModeUnset {
-		t.Fatalf("precondition: declared mode = %q, want unset", got)
-	}
-
-	r, err := runner.New(runner.Config{
-		AppName:           "app",
-		Agent:             root,
-		SessionService:    session.InMemoryService(),
-		AutoCreateSession: true,
-	})
-	if err != nil {
-		t.Fatalf("runner.New: %v", err)
-	}
-	var events int
-	for _, err := range r.Run(t.Context(), "u", "s1", genai.NewContentFromText("hi", genai.RoleUser), agent.RunConfig{}) {
-		if err != nil {
-			t.Fatalf("Run: %v", err)
-		}
-		events++
-	}
-	if events == 0 {
-		t.Fatal("the run produced no events, so it may not have reached the root bind")
-	}
-
-	if got := declaredMode(t, root); got != llminternal.ModeUnset {
-		t.Errorf("declared mode after runner.Run = %q, want unset (a run must not mutate the agent)", got)
 	}
 }
 

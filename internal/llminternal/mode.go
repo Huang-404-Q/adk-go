@@ -106,8 +106,11 @@ func ResolveMode(declared, byPlacement Mode) Mode {
 // nothing to a lookup.
 //
 // It is kept as a cheap guard against a future binder or reader that pairs the
-// two inconsistently, which is precisely the mistake that produced the three
-// regressions above, and because a key that names the agent is far easier to
+// two inconsistently. Against a state-only key such a pairing is a wrong HIT —
+// one agent governed by another's resolved mode — and the name turns it into a
+// miss, which is the safer failure. That is a different mistake from the three
+// regressions above, which were all errors in the key's design rather than in
+// how a call site pairs a name with a state. It also makes a key far easier to
 // read in a dump than a bare pointer.
 type boundModeKey struct {
 	agent string

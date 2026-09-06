@@ -608,17 +608,30 @@ func TestAgentNode_PlacementSurvivesATransferRoundTrip(t *testing.T) {
 	}
 }
 
-// AgentNode.Run must tolerate a tool context. agent.Context.WithAgentContext
-// returns nil for the tool and callback wrappers rather than erroring, so
-// routing the placement back through ctx crashes here on a path where every
-// symbol is exported. The merge base drained events for such a caller and this
-// must keep doing so.
+// AgentNode.Run must tolerate a tool context, and must still place the agent
+// while doing so. agent.Context.WithAgentContext returns nil for the tool and
+// callback wrappers rather than erroring, so routing the placement back through
+// ctx crashes here on a path where every symbol is exported. The merge base
+// drained events for such a caller and this must keep doing so.
+//
+// The agent deliberately declares NO mode. A chat declaration would make this
+// test blind to half of what it is for: chat and "no binding" are the same
+// answer at every reader, so the guarded-nil-check shape — which silences the
+// panic by dropping the placement — would pass. Undeclared, the placement is
+// the only thing that makes this agent single_turn, and its loss is visible in
+// the system instruction.
 func TestAgentNode_Run_AcceptsAToolContext(t *testing.T) {
 	t.Parallel()
 
 	llm := &capturingLLM{}
+	peer, err := llmagent.New(llmagent.Config{Name: "peer", Model: &capturingLLM{}, Description: "a peer"})
+	if err != nil {
+		t.Fatalf("llmagent.New(peer): %v", err)
+	}
 	a, err := llmagent.New(llmagent.Config{
-		Name: "c", Description: "c", Model: llm, Mode: llmagent.ModeChat,
+		Name: "c", Description: "c", Model: llm,
+		Instruction: "OWN_INSTRUCTION",
+		SubAgents:   []agent.Agent{peer},
 	})
 	if err != nil {
 		t.Fatalf("llmagent.New: %v", err)
@@ -642,14 +655,27 @@ func TestAgentNode_Run_AcceptsAToolContext(t *testing.T) {
 	toolCtx := agent.NewToolContext(ic, "fc-1", &session.EventActions{}, nil)
 
 	got := 0
-	for _, err := range node.Run(toolCtx, "hello") {
+	for _, err := range node.Run(toolCtx, nil) {
 		if err != nil {
 			t.Fatalf("node.Run: %v", err)
 		}
 		got++
 	}
 	if got == 0 {
-		t.Error("node.Run over a tool context produced no events")
+		t.Fatal("node.Run over a tool context produced no events")
+	}
+
+	// Draining is only half of it. The placement has to have survived, which is
+	// what a nil guard that keeps the old ctx would quietly lose.
+	si := llm.systemInstruction()
+	if !strings.Contains(si, "OWN_INSTRUCTION") {
+		t.Fatalf("the agent's own instruction is missing, so the absences below prove nothing; si = %q", si)
+	}
+	if strings.Contains(si, "You are an agent") {
+		t.Error("the node's agent got the identity preamble, so the single_turn placement was dropped")
+	}
+	if strings.Contains(si, "transfer_to_agent") {
+		t.Error("the node's agent got transfer instructions, so the single_turn placement was dropped")
 	}
 }
 

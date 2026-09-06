@@ -99,8 +99,11 @@ func (n *AgentNode) Run(ctx agent.Context, input any) iter.Seq2[*session.Event, 
 		// into ctx. Routing it through ctx.WithAgentContext would be the obvious
 		// shape and is a crash: that method returns nil for a tool context and
 		// for a callback context, both of which log and carry on, and the nil is
-		// dereferenced a few lines below. Nothing in this repository drives a
-		// node from inside a tool, but every symbol on that path is exported.
+		// dereferenced a few lines below. No tool context reaches this function:
+		// SingleTurnTool does drive a node from inside a tool, but workflow.RunNode
+		// uses the caller's context only to fetch its SubScheduler, and the child
+		// context comes from the scheduler's own parent. Every symbol on that path
+		// is exported, so an out-of-tree caller can still arrive here with one.
 		// Guarding the nil and keeping the old ctx is not the fix either — the
 		// binding only reaches the request processors through the context handed
 		// downstream, so dropping it would run an undeclared agent as chat at a
