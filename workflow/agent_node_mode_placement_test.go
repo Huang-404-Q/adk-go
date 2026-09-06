@@ -691,10 +691,12 @@ func TestAgentNode_Run_AcceptsAToolContext(t *testing.T) {
 }
 
 // The callback context is the other wrapper whose WithAgentContext returns nil
-// rather than erroring, and it is the one the code comments name alongside the
-// tool context. It reaches further than the tool context does: Session,
-// Memory, RunConfig and IsolationScope all return nil for it, so a placement
-// that survives here survives the emptiest context the agent API hands out.
+// rather than erroring, and both are named in the comments that shaped this
+// design. For everything AgentNode.Run touches it behaves exactly as the tool
+// context does — Session, Memory and RunConfig nil, IsolationScope empty — so
+// this test pins that the two stay equivalent rather than reaching a new path.
+// It exists because those comments claim the callback context is handled and
+// nothing drove one.
 //
 // As in the tool-context test the agent declares NO mode and carries a peer,
 // so dropping the placement is visible: an unplaced agent would be chat and

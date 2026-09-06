@@ -237,6 +237,13 @@ func validateChatModeWiring(edges []Edge) error {
 // agentNodeMode returns the mode the LlmAgent wrapped by node runs under
 // as a graph node, or ok=false when node is not an AgentNode wrapping an
 // LlmAgent.
+//
+// Resolving rather than reading the declaration makes no difference to either
+// caller today: both compare against task and chat, and resolving only ever
+// turns unset into single_turn. It is written this way because the answer this
+// returns is what the agent runs under at that placement, which is the whole
+// point of the change around it, and because a caller added later that compares
+// against single_turn would otherwise be silently wrong for an undeclared agent.
 func agentNodeMode(node Node) (llminternal.Mode, bool) {
 	agentNode, ok := node.(*AgentNode)
 	if !ok {

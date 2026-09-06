@@ -84,19 +84,20 @@ func NewAgentNode(a agent.Agent, cfg NodeConfig) (*AgentNode, error) {
 // Run implements the Node interface.
 func (n *AgentNode) Run(ctx agent.Context, input any) iter.Seq2[*session.Event, error] {
 	return func(yield func(*session.Event, error) bool) {
-		// Resolving the mode reads ctx, so a nil one is rejected before that
-		// rather than dereferenced. Exported, and RunLLMAgentAsNode — the other
-		// exported entry point that resolves a mode — rejects it the same way.
-		// The merge base panicked on a nil ctx too, a few lines lower while
-		// building params, so this turns a crash into an error rather than
-		// changing behaviour.
-		if ctx == nil {
-			yield(nil, fmt.Errorf("AgentNode.Run: nil context for agent %q", n.agent.Name()))
-			return
-		}
 		userContent, err := nodeInputToContent(input)
 		if err != nil {
 			yield(nil, err)
+			return
+		}
+		// Resolving the mode reads ctx, so a nil one is rejected before that
+		// rather than dereferenced further down. Exported, and RunLLMAgentAsNode
+		// — the other exported entry point that resolves a mode — rejects it the
+		// same way. Placed after nodeInputToContent, which never touches ctx, so
+		// an unmarshalable input still reports the marshaling error the merge
+		// base reported for it. Untyped nil only: a typed-nil agent.Context
+		// still panics, as it does everywhere else in these packages.
+		if ctx == nil {
+			yield(nil, fmt.Errorf("AgentNode.Run: nil context for agent %q", n.agent.Name()))
 			return
 		}
 

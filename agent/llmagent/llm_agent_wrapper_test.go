@@ -389,6 +389,38 @@ func TestPrepareLLMAgentInput(t *testing.T) {
 			t.Errorf("IsolationScope = %q, want empty", got.IsolationScope)
 		}
 	})
+
+	// The two rows that cover what this function's change actually did: it
+	// reads the resolved mode rather than the declaration, so an UNDECLARED
+	// agent seeds when a placement bound it single_turn and does not otherwise.
+	// Every row above declares a mode, so none of them can tell the two apart.
+	t.Run("undeclared with no binding returns nil", func(t *testing.T) {
+		t.Parallel()
+		a := makeLLMAgent(t, "u")
+		ctx := newStubNodeContext(t, a, "")
+		if got := llmagent.PrepareLLMAgentInput(a, ctx, "hello"); got != nil {
+			t.Errorf("PrepareLLMAgentInput for an unplaced undeclared agent = %v, want nil", got)
+		}
+	})
+
+	t.Run("undeclared bound single_turn by a placement seeds", func(t *testing.T) {
+		t.Parallel()
+		a := makeLLMAgent(t, "u")
+		internalAgent, ok := a.(llminternal.Agent)
+		if !ok {
+			t.Fatal("agent is not an llminternal.Agent")
+		}
+		state := llminternal.Reveal(internalAgent)
+		bound := llminternal.WithBoundMode(t.Context(), a.Name(), state, llminternal.ModeSingleTurn)
+		ic := icontext.NewInvocationContext(bound, icontext.InvocationContextParams{
+			Agent:        a,
+			InvocationID: "inv-bound",
+		})
+		got := llmagent.PrepareLLMAgentInput(a, agent.NewContext(ic), "hello")
+		if got == nil {
+			t.Fatal("expected a seed event for an agent a placement bound single_turn; got nil")
+		}
+	})
 }
 
 func TestProcessLLMAgentOutput(t *testing.T) {
@@ -1283,16 +1315,25 @@ func fcContent(id, name string, args map[string]any) *genai.Content {
 
 // RunLLMAgentAsNode is exported, and agent.Context.WithAgentContext returns nil
 // for the tool and callback wrappers rather than erroring, so routing the mode
-// binding back through it nils the context out. The single_turn and task
-// branches now resolve their binding without touching WithAgentContext at all,
-// which this pins.
+// binding back through it nils the context out. This pins that the single_turn
+// and task branches do not do that: they panic if the binding is routed back
+// unguarded.
+//
+// What it does NOT pin is the binding itself. The agent here declares
+// single_turn, so deleting the bind leaves the same branch selected and this
+// test still passes. Its workflow-side sibling avoids that by declaring no
+// mode, and the same trick does not work here: an undeclared agent with no
+// binding resolves to chat at this entry point, and a chat run over a tool
+// context panics on the merge base and on head alike. The binding is pinned
+// locally instead by TestRunLLMAgentAsNode_DeclaredSingleTurn_BindsForTheRequestProcessors,
+// which fails when it is deleted.
 //
 // The chat branch is deliberately not covered. It is the one branch that still
 // re-binds, because runChat needs the agent.Context itself, and it guards the
-// nil — but a chat run cannot be driven from a tool context on the merge base
-// either. Both that and a seeded single_turn run (a tool context reports no
-// session, which wrappedSession then wraps) panic identically without this
-// change, so neither is this PR's to fix or to assert.
+// nil. That guard has no test because it cannot change an outcome: a chat run
+// over a tool context dies either way, guarded a line later or unguarded a line
+// earlier. A seeded single_turn run over one panics identically on the merge
+// base too, so neither is this PR's to fix or to assert.
 func TestRunLLMAgentAsNode_SingleTurnAcceptsAToolContext(t *testing.T) {
 	t.Parallel()
 
