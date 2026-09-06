@@ -591,6 +591,13 @@ func TestAgentNode_PlacementSurvivesATransferRoundTrip(t *testing.T) {
 	}
 	i := idx[1]
 
+	// Two of the three checks below are absences, so guard against a request
+	// whose system instruction was never assembled at all — every sibling test
+	// in this file carries the same guard.
+	if !strings.Contains(m.si[i], "MARKER_WORKER") {
+		t.Fatalf("worker's own instruction is missing, so the absences below prove nothing; si = %q", m.si[i])
+	}
+
 	identity := strings.Contains(m.si[i], "You are an agent. Your internal name is")
 	transfer := strings.Contains(m.si[i], "You have a list of other agents to transfer to")
 	history := false
@@ -683,6 +690,36 @@ func TestAgentNode_Run_AcceptsAToolContext(t *testing.T) {
 	}
 }
 
+// AgentNode.Run is exported and now resolves a mode, which reads ctx. It must
+// reject a nil context rather than dereference it, the way RunLLMAgentAsNode
+// does. The merge base panicked on a nil ctx too — a few lines lower, building
+// params — so this turns a crash into an error rather than changing behaviour.
+func TestAgentNode_Run_NilContext_Errors(t *testing.T) {
+	t.Parallel()
+
+	a, err := llmagent.New(llmagent.Config{Name: "c", Description: "c", Model: &capturingLLM{}})
+	if err != nil {
+		t.Fatalf("llmagent.New: %v", err)
+	}
+	node, err := workflow.NewAgentNode(a, workflow.NodeConfig{})
+	if err != nil {
+		t.Fatalf("NewAgentNode: %v", err)
+	}
+
+	var gotErr error
+	for _, err := range node.Run(nil, nil) {
+		if err != nil {
+			gotErr = err
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("expected an error for a nil context; got nil")
+	}
+	if !strings.Contains(gotErr.Error(), "nil context") {
+		t.Errorf("err = %q, want it to mention a nil context", gotErr.Error())
+	}
+}
+
 // The mode binding is keyed by agent NAME, and names are only unique across
 // SubAgents(). A graph node's agent is not in SubAgents(), so a nested agent
 // can share a name with one that already holds a binding, and runner.New does
@@ -695,6 +732,12 @@ func TestAgentNode_Run_AcceptsAToolContext(t *testing.T) {
 // agent it was resolved for, this child read the root's chat binding and was
 // handed the identity preamble and transfer instructions the merge base
 // correctly withheld.
+//
+// This test's power depends on the runner's root bind existing. Delete that
+// bind and there is no binding for the child to read, so a name-only key
+// passes too and this stops discriminating. The bind is inert to every reader
+// — that is why removing it survives the mutation battery — but it is not
+// inert to this test, so do not delete it on the strength of that survivor.
 func TestAgentNode_ASameNamedNestedAgentKeepsItsOwnDeclaration(t *testing.T) {
 	t.Parallel()
 

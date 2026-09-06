@@ -418,7 +418,11 @@ type IncludeContents string
 const (
 	// IncludeContentsNone makes the llmagent operate solely on its current turn (latest user input + any following agent events).
 	IncludeContentsNone IncludeContents = "none"
-	// IncludeContentsDefault is enabled by default. The llmagent receives the relevant conversation history.
+	// IncludeContentsDefault is what an unset IncludeContents behaves as for a
+	// plain conversational agent: the llmagent receives the relevant
+	// conversation history. Setting it explicitly is not the same as leaving
+	// the field unset — it also keeps the history for an agent placed as a
+	// single_turn workflow node, which otherwise sees only the current turn.
 	IncludeContentsDefault IncludeContents = "default"
 )
 
