@@ -98,8 +98,17 @@ func ResolveMode(declared, byPlacement Mode) Mode {
 // lookup chain, and the reader then rejected it, so the agent that owned it
 // silently lost its placement.
 //
-// The name keeps the slot per-agent even so, which is what makes re-binding the
-// SAME agent shadow its outer binding rather than sit beside it.
+// The name earns its place differently, and not the way it might look. It is
+// NOT what makes re-binding the same agent shadow its outer binding — that is
+// the identity, which is equal on both binds, so the key would be equal with or
+// without the name. Every binder and every reader pairs an agent's name with
+// that same agent's state, so the name is a function of the identity and adds
+// nothing to a lookup.
+//
+// It is kept as a cheap guard against a future binder or reader that pairs the
+// two inconsistently, which is precisely the mistake that produced the three
+// regressions above, and because a key that names the agent is far easier to
+// read in a dump than a bare pointer.
 type boundModeKey struct {
 	agent string
 	state *State
@@ -162,6 +171,8 @@ func BoundMode(ctx context.Context, agentName string, state *State) (Mode, bool)
 
 // ModeFor returns the mode agentName runs under: the mode this invocation bound
 // for it, else its own declaration.
+//
+// state must be non-nil — the declaration is read off it.
 //
 // The binding is consulted first and is authoritative, because it is the only
 // thing that knows where the agent was placed. It is safe to prefer because

@@ -42,11 +42,10 @@ func TestResolveMode(t *testing.T) {
 	}
 }
 
-// The binding is keyed by agent NAME and validated against agent IDENTITY, and
-// the properties that follow are what the whole design rests on. None is
-// otherwise reachable from a test: no in-tree path binds two different values
-// for one name, and no in-tree path reads a binding for an agent that is not
-// the one running.
+// The binding is keyed by agent name AND agent identity, and the properties
+// that follow are what the whole design rests on. None is otherwise reachable
+// from a test: no in-tree path binds two different values for one name, and no
+// in-tree path reads a binding for an agent that is not the one running.
 func TestBoundMode_Scoping(t *testing.T) {
 	t.Parallel()
 
