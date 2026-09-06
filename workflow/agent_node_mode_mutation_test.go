@@ -443,3 +443,64 @@ func TestAgentNode_Run_DoesNotMutateTheAgentsIncludeContents(t *testing.T) {
 		t.Errorf("declared mode after a single_turn placement = %q, want unset", got)
 	}
 }
+
+// The whole change, in the shape a user meets it: one placement must not decide
+// what the agent is for every placement after it.
+//
+// An undeclared agent is run at a graph node, then the SAME instance is used as
+// a runner root. On the merge base the node run stamped it — Mode became
+// single_turn and IncludeContents became "none", permanently, on the object —
+// so the runner then rejected it with "root agent %q must be a chat LlmAgent,
+// but has mode single_turn". Measured both ways: the base errors, this runs.
+//
+// The individual writes are pinned field by field elsewhere. This pins the
+// consequence, which is the thing the PR description promises and the only
+// place the two placements are exercised in order on one instance.
+func TestOneInstance_ANodeRunDoesNotDecideItsNextPlacement(t *testing.T) {
+	t.Parallel()
+
+	a, err := llmagent.New(llmagent.Config{
+		Name: "worker", Description: "w", Model: &raceFreeLLM{}, Instruction: "OWN",
+	})
+	if err != nil {
+		t.Fatalf("llmagent.New: %v", err)
+	}
+
+	node, err := workflow.NewAgentNode(a, workflow.NodeConfig{})
+	if err != nil {
+		t.Fatalf("NewAgentNode: %v", err)
+	}
+	ctx := newModeTestCtx(t, a)
+	for _, err := range node.Run(ctx, nil) {
+		if err != nil {
+			t.Fatalf("node.Run: %v", err)
+		}
+	}
+
+	// Nothing the run did may be visible on the agent itself.
+	state := llminternal.Reveal(a.(llminternal.Agent))
+	if state.Mode != llminternal.ModeUnset {
+		t.Errorf("Mode after a node run = %q, want unset", state.Mode)
+	}
+	if state.IncludeContents != "" {
+		t.Errorf("IncludeContents after a node run = %q, want empty", state.IncludeContents)
+	}
+
+	// And the consequence: the same instance is still usable as a chat root.
+	r, err := runner.New(runner.Config{
+		AppName: "app", Agent: a,
+		SessionService: session.InMemoryService(), AutoCreateSession: true,
+	})
+	if err != nil {
+		t.Fatalf("runner.New after a node run: %v", err)
+	}
+	var runErr error
+	for _, err := range r.Run(t.Context(), "u", "s1", genai.NewContentFromText("hello", "user"), agent.RunConfig{}) {
+		if err != nil {
+			runErr = err
+		}
+	}
+	if runErr != nil {
+		t.Errorf("running the same instance as a chat root after a node run: %v", runErr)
+	}
+}
