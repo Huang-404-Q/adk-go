@@ -1029,3 +1029,85 @@ func TestAgentNode_ASingleTurnPlacementDoesNotReachASameNamedUndeclaredDescendan
 		t.Error("the nested undeclared agent lost its transfer instructions; it read the outer agent's single_turn binding")
 	}
 }
+
+// The enumerated behaviour change that had no test: a composite's UNDECLARED
+// child, re-entered as a transfer target, runs chat where the merge base ran
+// single_turn.
+//
+// installTaskTools never sees this agent — its parent is a SequentialAgent, not
+// an LlmAgent — and no node wraps it, so on the base nothing had stamped it and
+// the wrapper stamped single_turn at the re-entry. Head has no binding for it
+// and resolves the chat fallback instead.
+//
+// Measured both ways on this tree. Base: no identity preamble, no transfer
+// block, no history. Head: all three. Those three are the user-visible cost of
+// the flip and are what the PR description enumerates; asserting them here is
+// what makes the enumeration checkable.
+func TestAgentNode_ACompositeChildReenteredByTransferRunsChat(t *testing.T) {
+	m := &roundTripLLM{script: map[string][]*genai.Content{
+		"worker": {roundTripTransferTo("helper")},
+		"helper": {roundTripTransferTo("worker")},
+	}}
+	helper, err := llmagent.New(llmagent.Config{
+		Name: "helper", Description: "helps", Model: m, Instruction: "MARKER_HELPER",
+	})
+	if err != nil {
+		t.Fatalf("llmagent.New(helper): %v", err)
+	}
+	worker, err := llmagent.New(llmagent.Config{
+		Name: "worker", Description: "works", Model: m, Instruction: "MARKER_WORKER",
+		SubAgents: []agent.Agent{helper},
+	})
+	if err != nil {
+		t.Fatalf("llmagent.New(worker): %v", err)
+	}
+	seq, err := sequentialagent.New(sequentialagent.Config{
+		AgentConfig: agent.Config{Name: "seq", Description: "seq", SubAgents: []agent.Agent{worker}},
+	})
+	if err != nil {
+		t.Fatalf("sequentialagent.New: %v", err)
+	}
+	r, err := runner.New(runner.Config{
+		AppName: "app", Agent: seq,
+		SessionService: session.InMemoryService(), AutoCreateSession: true,
+	})
+	if err != nil {
+		t.Fatalf("runner.New: %v", err)
+	}
+	for _, err := range r.Run(t.Context(), "u", "s1", genai.NewContentFromText("EARLIER_TURN", "user"), agent.RunConfig{}) {
+		if err != nil {
+			t.Fatalf("r.Run: %v", err)
+		}
+	}
+
+	var idx []int
+	for i, who := range m.seen {
+		if who == "worker" {
+			idx = append(idx, i)
+		}
+	}
+	if len(idx) < 2 {
+		t.Fatalf("worker was called %d time(s), want 2; call order = %v", len(idx), m.seen)
+	}
+	si := m.si[idx[1]]
+	if !strings.Contains(si, "MARKER_WORKER") {
+		t.Fatalf("worker's own instruction is missing, so the presences below prove nothing; si = %q", si)
+	}
+	if !strings.Contains(si, "You are an agent") {
+		t.Error("no identity preamble on re-entry; an unbound undeclared agent must run chat here")
+	}
+	if !strings.Contains(si, "transfer_to_agent") {
+		t.Error("no transfer instructions on re-entry; an unbound undeclared agent must run chat here")
+	}
+	history := false
+	for _, c := range m.conts[idx[1]] {
+		for _, p := range c.Parts {
+			if p != nil && strings.Contains(p.Text, "EARLIER_TURN") {
+				history = true
+			}
+		}
+	}
+	if !history {
+		t.Error("no conversation history on re-entry; an unbound undeclared agent must run chat here")
+	}
+}
