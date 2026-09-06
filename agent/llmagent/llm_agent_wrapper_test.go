@@ -1323,17 +1323,10 @@ func fcContent(id, name string, args map[string]any) *genai.Content {
 // single_turn, so deleting the bind leaves the same branch selected and this
 // test still passes. Its workflow-side sibling avoids that by declaring no
 // mode, and the same trick does not work here: an undeclared agent with no
-// binding resolves to chat at this entry point, and a chat run over a tool
-// context panics on the merge base and on head alike. The binding is pinned
-// locally instead by TestRunLLMAgentAsNode_DeclaredSingleTurn_BindsForTheRequestProcessors,
-// which fails when it is deleted.
-//
-// The chat branch is deliberately not covered. It is the one branch that still
-// re-binds, because runChat needs the agent.Context itself, and it guards the
-// nil. That guard has no test because it cannot change an outcome: a chat run
-// over a tool context dies either way, guarded a line later or unguarded a line
-// earlier. A seeded single_turn run over one panics identically on the merge
-// base too, so neither is this PR's to fix or to assert.
+// binding resolves to chat at this entry point, which is a different case
+// covered by the test below. The binding is pinned locally instead by
+// TestRunLLMAgentAsNode_DeclaredSingleTurn_BindsForTheRequestProcessors, which
+// fails when it is deleted.
 func TestRunLLMAgentAsNode_SingleTurnAcceptsAToolContext(t *testing.T) {
 	t.Parallel()
 
@@ -1365,6 +1358,58 @@ func TestRunLLMAgentAsNode_SingleTurnAcceptsAToolContext(t *testing.T) {
 	// regression, and only reaching the model rules it out.
 	if llm.got == nil {
 		t.Error("the model was never called; the single_turn branch did not run the agent")
+	}
+}
+
+// The regression this change came closest to shipping, and the one case where
+// the chat fallback is not free.
+//
+// An UNDECLARED agent driven from a tool or callback context worked on the merge
+// base: the wrapper stamped it single_turn, and that branch builds its own
+// InvocationContext, which a tool context survives. Resolving to chat instead
+// sends it to runChat, which hands the tool context to agent.Run, whose
+// ctx.WithContext returns nil for that wrapper — a nil dereference several
+// frames down. Measured both ways: the same call completes on the merge base
+// and panicked here until the chat branch started reporting it.
+//
+// So the mode flip is kept, deliberately and documented, and the failure it
+// exposes is made legible instead of fatal. A caller that needs this agent to
+// run over a tool context must declare single_turn or place it at a node.
+func TestRunLLMAgentAsNode_UndeclaredOverAToolContext_ErrorsRatherThanPanics(t *testing.T) {
+	t.Parallel()
+
+	a := makeLLMAgent(t, "worker") // undeclared: resolves to chat with nothing bound
+
+	svc := session.InMemoryService()
+	resp, err := svc.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "u"})
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	ic := icontext.NewInvocationContext(t.Context(), icontext.InvocationContextParams{
+		Agent:        a,
+		Session:      resp.Session,
+		UserContent:  genai.NewContentFromText("hi", "user"),
+		InvocationID: "inv-undeclared-tool-ctx",
+	})
+	toolCtx := agent.NewToolContext(ic, "fc-1", &session.EventActions{}, nil)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked instead of reporting the unusable context: %v", r)
+		}
+	}()
+
+	var gotErr error
+	for _, err := range llmagent.RunLLMAgentAsNode(a, toolCtx, nil) {
+		if err != nil {
+			gotErr = err
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("expected an error for a chat run over a tool context; got nil")
+	}
+	if !strings.Contains(gotErr.Error(), "tool or callback context") {
+		t.Errorf("err = %q, want it to name the unusable context", gotErr.Error())
 	}
 }
 

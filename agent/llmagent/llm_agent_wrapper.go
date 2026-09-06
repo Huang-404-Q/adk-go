@@ -127,19 +127,28 @@ func RunLLMAgentAsNode(a agent.Agent, ctx agent.Context, nodeInput any) iter.Seq
 		case llminternal.ModeChat:
 			// runChat needs the agent.Context itself, for the sub-scheduler its
 			// task delegations dispatch through, so this is the one branch that
-			// re-binds rather than passing `bound` down. WithAgentContext
-			// returns nil for a tool or callback context instead of erroring,
-			// hence the guard. Losing the binding there costs nothing: mode is
-			// chat on this branch, and every reader treats a chat binding and
-			// an absent one identically, which is the same reason the runner's
-			// root bind is inert.
+			// re-binds rather than passing `bound` down.
+			//
+			// WithAgentContext returns nil for a tool or callback context
+			// instead of erroring, and a chat run cannot survive one: agent.Run
+			// calls ctx.WithContext, which those same wrappers also return nil
+			// from, and the flow dereferences it. Reporting that is the whole
+			// point of this branch. Carrying on with the unbound context
+			// instead — which an earlier revision did — reaches the same dead
+			// end by way of a nil-pointer panic several frames down.
+			//
+			// This is the one place an undeclared agent notices the chat
+			// fallback: the merge base stamped it single_turn, which took the
+			// branch below and built its own context, so the same call used to
+			// work. It is a documented behaviour change, not an accident.
 			//
 			// Kept in a local rather than assigned back to ctx: ctx is this
 			// closure's captured parameter, and writing it would make the
 			// returned iterator stateful for a caller that ranges it twice.
-			chatCtx := ctx
-			if rebound := ctx.WithAgentContext(bound); rebound != nil {
-				chatCtx = rebound
+			chatCtx := ctx.WithAgentContext(bound)
+			if chatCtx == nil {
+				yield(nil, fmt.Errorf("RunLLMAgentAsNode: LlmAgent %q runs as chat here, which a tool or callback context cannot drive", a.Name()))
+				return
 			}
 			runChat(a, chatCtx, yield)
 		case llminternal.ModeSingleTurn, llminternal.ModeTask:
