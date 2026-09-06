@@ -1329,9 +1329,12 @@ func TestRunLLMAgentAsNode_SingleTurnAcceptsAToolContext(t *testing.T) {
 
 // The wrapper's two removed writes are pinned from workflow_test, which leaves
 // `go test ./agent/llmagent/` — the loop someone editing this file runs — unable
-// to see one of them come back. Restoring the mode write fails ten tests here,
-// so that one is covered locally. Restoring the IncludeContents write in its
-// guarded form fails nothing in this package at all.
+// to see one of them come back. The mode write needs no pin of its own:
+// restoring it fails TestCompactionE2E, TestAgentTransfer and
+// TestToolCallbacksAgent right here, because each drives an undeclared agent
+// whose system instruction changes once it is stamped single_turn. Restoring
+// the IncludeContents write in its guarded form fails nothing in this package
+// at all, hence this test.
 func TestRunLLMAgentAsNode_DoesNotMutateTheAgentsIncludeContents(t *testing.T) {
 	t.Parallel()
 

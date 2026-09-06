@@ -690,6 +690,74 @@ func TestAgentNode_Run_AcceptsAToolContext(t *testing.T) {
 	}
 }
 
+// The callback context is the other wrapper whose WithAgentContext returns nil
+// rather than erroring, and it is the one the code comments name alongside the
+// tool context. It reaches further than the tool context does: Session,
+// Memory, RunConfig and IsolationScope all return nil for it, so a placement
+// that survives here survives the emptiest context the agent API hands out.
+//
+// As in the tool-context test the agent declares NO mode and carries a peer,
+// so dropping the placement is visible: an unplaced agent would be chat and
+// would collect the identity preamble and the transfer instructions.
+func TestAgentNode_Run_AcceptsACallbackContext(t *testing.T) {
+	t.Parallel()
+
+	llm := &capturingLLM{}
+	peer, err := llmagent.New(llmagent.Config{Name: "peer", Model: &capturingLLM{}, Description: "a peer"})
+	if err != nil {
+		t.Fatalf("llmagent.New(peer): %v", err)
+	}
+	a, err := llmagent.New(llmagent.Config{
+		Name: "c", Description: "c", Model: llm,
+		Instruction: "OWN_INSTRUCTION",
+		SubAgents:   []agent.Agent{peer},
+	})
+	if err != nil {
+		t.Fatalf("llmagent.New: %v", err)
+	}
+	node, err := workflow.NewAgentNode(a, workflow.NodeConfig{})
+	if err != nil {
+		t.Fatalf("NewAgentNode: %v", err)
+	}
+
+	svc := session.InMemoryService()
+	resp, err := svc.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "u"})
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	std := runconfig.ToContext(t.Context(), &runconfig.RunConfig{StreamingMode: runconfig.StreamingModeNone})
+	ic := icontext.NewInvocationContext(std, icontext.InvocationContextParams{
+		Agent: a, Session: resp.Session,
+		UserContent:  genai.NewContentFromText("hi", "user"),
+		InvocationID: "inv-cb-ctx",
+	})
+	cbCtx := agent.NewCallbackContext(ic, &session.EventActions{})
+
+	// nodeInput must be nil, for the same reason as the tool-context test: the
+	// seeded path needs a session and this context reports none.
+	got := 0
+	for _, err := range node.Run(cbCtx, nil) {
+		if err != nil {
+			t.Fatalf("node.Run: %v", err)
+		}
+		got++
+	}
+	if got == 0 {
+		t.Fatal("node.Run over a callback context produced no events")
+	}
+
+	si := llm.systemInstruction()
+	if !strings.Contains(si, "OWN_INSTRUCTION") {
+		t.Fatalf("the agent's own instruction is missing, so the absences below prove nothing; si = %q", si)
+	}
+	if strings.Contains(si, "You are an agent") {
+		t.Error("the node's agent got the identity preamble, so the single_turn placement was dropped")
+	}
+	if strings.Contains(si, "transfer_to_agent") {
+		t.Error("the node's agent got transfer instructions, so the single_turn placement was dropped")
+	}
+}
+
 // AgentNode.Run is exported and now resolves a mode, which reads ctx. It must
 // reject a nil context rather than dereference it, the way RunLLMAgentAsNode
 // does. The merge base panicked on a nil ctx too — a few lines lower, building
