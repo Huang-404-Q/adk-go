@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -347,5 +348,80 @@ func TestRunner_Run_DoesNotMutateTheRootAgentsMode(t *testing.T) {
 
 	if got := declaredMode(t, root); got != llminternal.ModeUnset {
 		t.Errorf("declared mode after runner.Run = %q, want unset (a run must not mutate the agent)", got)
+	}
+}
+
+// The sibling of the test above, for the dimension it cannot see. Construction
+// order moved two things on the merge base, not one: which delegation tool the
+// coordinator installed, and whether the sub-agent was a transfer TARGET.
+// Node-first stamped the undeclared agent single_turn, and isUntransferableMode
+// reads the declaration, so it dropped off the target list entirely. That list
+// is assembled in the request processor rather than in state.Tools, so no
+// assertion on tool names can observe it.
+func TestLlmAgent_TransferTargets_AreConstructionOrderIndependent(t *testing.T) {
+	t.Parallel()
+
+	// coordinatorInstruction builds a chat coordinator over one undeclared
+	// sub-agent, optionally placing that sub-agent at a graph node first, runs
+	// it, and returns the system instruction the coordinator's model saw.
+	coordinatorInstruction := func(t *testing.T, nodeFirst bool) string {
+		t.Helper()
+		sub, err := llmagent.New(llmagent.Config{Name: "worker", Description: "does the work"})
+		if err != nil {
+			t.Fatalf("llmagent.New(worker): %v", err)
+		}
+		if nodeFirst {
+			if _, err := workflow.NewAgentNode(sub, workflow.NodeConfig{}); err != nil {
+				t.Fatalf("NewAgentNode: %v", err)
+			}
+		}
+		llm := &capturingLLM{}
+		coord, err := llmagent.New(llmagent.Config{
+			Name:      "coordinator",
+			Mode:      llmagent.ModeChat,
+			Model:     llm,
+			SubAgents: []agent.Agent{sub},
+		})
+		if err != nil {
+			t.Fatalf("llmagent.New(coordinator): %v", err)
+		}
+		if !nodeFirst {
+			if _, err := workflow.NewAgentNode(sub, workflow.NodeConfig{}); err != nil {
+				t.Fatalf("NewAgentNode: %v", err)
+			}
+		}
+		r, err := runner.New(runner.Config{
+			AppName:           "app",
+			Agent:             coord,
+			SessionService:    session.InMemoryService(),
+			AutoCreateSession: true,
+		})
+		if err != nil {
+			t.Fatalf("runner.New: %v", err)
+		}
+		for _, err := range r.Run(t.Context(), "u", "s1", genai.NewContentFromText("hi", genai.RoleUser), agent.RunConfig{}) {
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+		}
+		if llm.got == nil {
+			t.Fatal("the coordinator's model was never called, so this pins nothing")
+		}
+		return llm.systemInstruction()
+	}
+
+	coordFirst := coordinatorInstruction(t, false)
+	nodeFirst := coordinatorInstruction(t, true)
+
+	// Guard against both orders being empty, which would satisfy the equality
+	// below while proving nothing.
+	if !strings.Contains(coordFirst, "transfer_to_agent") {
+		t.Fatalf("no transfer instructions in either order, so the comparison is vacuous; got %q", coordFirst)
+	}
+	if !strings.Contains(coordFirst, "worker") {
+		t.Errorf("the undeclared sub-agent is not a transfer target when the coordinator is built first; got %q", coordFirst)
+	}
+	if coordFirst != nodeFirst {
+		t.Errorf("the coordinator's transfer targets depend on construction order:\n coordinator-first = %q\n node-first        = %q", coordFirst, nodeFirst)
 	}
 }
