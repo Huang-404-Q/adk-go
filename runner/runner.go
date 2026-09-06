@@ -591,9 +591,12 @@ func (r *Runner) Run(ctx context.Context, userID, sessionID string, msg *genai.C
 			// which is how a later reader would come to be right about graph
 			// nodes and wrong about roots.
 			//
-			// Kept in a local rather than assigned back to ctx: ctx is this
-			// closure's captured parameter, and writing it would make the returned
-			// iterator stateful for a caller that ranges it twice.
+			// Kept in a local rather than assigned back to ctx, which is this
+			// closure's captured parameter. Re-deriving the binding on a second
+			// range would be harmless in itself — same key, same value — but
+			// the sibling branch below already assigns four wrappers back onto
+			// ctx, so this iterator is stateful for a re-range whatever this
+			// line does. Not adding a fifth is the whole claim.
 			rootCtx := llminternal.WithBoundMode(ctx, r.rootAgent.Name(), llmInternalState, rootMode)
 
 			hasTaskSubAgent := func() bool {

@@ -137,14 +137,20 @@ func RunLLMAgentAsNode(a agent.Agent, ctx agent.Context, nodeInput any) iter.Seq
 			// instead — which an earlier revision did — reaches the same dead
 			// end by way of a nil-pointer panic several frames down.
 			//
-			// This is the one place an undeclared agent notices the chat
-			// fallback: the merge base stamped it single_turn, which took the
-			// branch below and built its own context, so the same call used to
-			// work. It is a documented behaviour change, not an accident.
+			// This is where an undeclared agent over a tool or callback context
+			// notices the chat fallback: the merge base stamped it single_turn,
+			// which took the branch below and built its own context, so the
+			// same call used to work. It is not the only place the fallback is
+			// observable — a composite's undeclared child re-entered by a
+			// transfer-back also runs chat here where it ran single_turn, over
+			// an ordinary context and without any error. Both are documented
+			// behaviour changes rather than accidents.
 			//
-			// Kept in a local rather than assigned back to ctx: ctx is this
-			// closure's captured parameter, and writing it would make the
-			// returned iterator stateful for a caller that ranges it twice.
+			// Kept in a local rather than assigned back to ctx, which is this
+			// closure's captured parameter. A second sequential range would be
+			// unharmed either way — re-deriving the binding gives the same key
+			// and value — so what the local prevents is two goroutines ranging
+			// one returned iterator, a write/write race on that parameter.
 			chatCtx := ctx.WithAgentContext(bound)
 			if chatCtx == nil {
 				yield(nil, fmt.Errorf("RunLLMAgentAsNode: LlmAgent %q runs as chat here, which a tool or callback context cannot drive", a.Name()))
@@ -158,6 +164,19 @@ func RunLLMAgentAsNode(a agent.Agent, ctx agent.Context, nodeInput any) iter.Seq
 			}
 			sess := ctx.Session()
 			if seed := PrepareLLMAgentInput(a, ctx, nodeInput); seed != nil {
+				// A tool or callback context reports no session, and wrapping a
+				// nil one panics further down in telemetry. That panic predates
+				// this change; the set of callers that reach it does not. An
+				// undeclared sub-agent adopted by a chat coordinator used to be
+				// stamped chat, and chat ignores nodeInput and never seeds — it
+				// now resolves single_turn at a node and arrives here. Measured:
+				// the same call completes on the merge base. Same treatment as
+				// the chat branch, then: say what is missing rather than crash
+				// several frames later.
+				if sess == nil {
+					yield(nil, fmt.Errorf("RunLLMAgentAsNode: LlmAgent %q needs a session to seed its input, which a tool or callback context does not provide", a.Name()))
+					return
+				}
 				sess = newWrappedSession(sess, seed)
 			}
 			ic := icontext.NewInvocationContext(bound, icontext.InvocationContextParams{

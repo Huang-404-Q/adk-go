@@ -390,10 +390,14 @@ func TestPrepareLLMAgentInput(t *testing.T) {
 		}
 	})
 
-	// The two rows that cover what this function's change actually did: it
-	// reads the resolved mode rather than the declaration, so an UNDECLARED
-	// agent seeds when a placement bound it single_turn and does not otherwise.
-	// Every row above declares a mode, so none of them can tell the two apart.
+	// What this function's change actually did: it reads the resolved mode
+	// rather than the declaration, so an UNDECLARED agent seeds when a
+	// placement bound it single_turn and does not otherwise. Every row above
+	// declares a mode, so none of them can tell the two apart.
+	//
+	// Only the second row discriminates — the first passes on the merge base
+	// too, where an undeclared agent simply failed the declaration test. It is
+	// the control, and it is here because there was no unset-mode row at all.
 	t.Run("undeclared with no binding returns nil", func(t *testing.T) {
 		t.Parallel()
 		a := makeLLMAgent(t, "u")
@@ -796,8 +800,10 @@ func TestRunLLMAgentAsNode_DeclaredSingleTurn_BindsForTheRequestProcessors(t *te
 		UserContent:  genai.NewContentFromText("current question", "user"),
 		InvocationID: "inv-declared-single-turn",
 	})
-	// nodeInput is nil, as it is on the runner path: nothing seeds this agent,
-	// so hiding history rests on the binding alone.
+	// nodeInput is nil, which is the resume shape of the runner path rather than
+	// every turn of it — a fresh turn passes the user text down. Nil is what
+	// this test wants either way: with nothing to seed, hiding history rests on
+	// the binding alone.
 	for _, err := range llmagent.RunLLMAgentAsNode(a, agent.NewContext(ic), nil) {
 		if err != nil {
 			t.Fatalf("RunLLMAgentAsNode: %v", err)

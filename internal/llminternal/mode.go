@@ -38,8 +38,12 @@ import "context"
 //
 // Note that "there is no binding to consult" would be the wrong reason for
 // isUntransferableMode. Bindings nest, so when a callee computes its transfer
-// targets the caller's binding is still live in that context. It is looked past
-// deliberately.
+// targets the caller's binding is still live in that context, and it is looked
+// past deliberately. That said, the caller is the one agent the function is
+// never applied to — agent_transfer appends the parent without the check and
+// filters only sub-agents and peers — so the live binding this paragraph is
+// about belongs to an agent the filter never sees. The decision stands on the
+// tree-shape argument above, not on this one.
 //
 // Every other reader resolves, with one deliberate exception. A reader that
 // tests for single_turn and skips the resolution disagrees with the request the

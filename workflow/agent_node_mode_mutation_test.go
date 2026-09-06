@@ -263,6 +263,15 @@ func (m *raceFreeLLM) GenerateContent(context.Context, *model.LLMRequest, bool) 
 // make. Placement is resolved again on every run, so build the nodes
 // single-threaded and race the runs instead: the write this replaces lived on
 // the run path, where it raced the contents processor's read. Run with -race.
+//
+// Scope, because "one instance, concurrent invocations" sounds broader than
+// what this races. The agent has no Tools and no Toolsets, so a run never
+// enters the tool processor, whose append onto the agent's own Tools slice is a
+// separate shared-state hazard this change does not touch. Every goroutine gets
+// its own node, workflow and session, so the only objects shared are the agent
+// and the model. And all sixteen placements are the same one — an instance
+// under a runner-root chat placement and a graph-node single_turn placement at
+// the same time is not raced anywhere.
 func TestOneAgentInstance_ConcurrentInvocationsAreRaceFree(t *testing.T) {
 	t.Parallel()
 

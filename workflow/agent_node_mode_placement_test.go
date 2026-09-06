@@ -760,6 +760,81 @@ func TestAgentNode_Run_AcceptsACallbackContext(t *testing.T) {
 	}
 }
 
+// The second cell of the round-15 class, found the same way and measured the
+// same way.
+//
+// An undeclared sub-agent ADOPTED by a chat coordinator used to be stamped chat
+// by installTaskTools, and chat ignores nodeInput, so a node driving it from a
+// tool context with a non-nil input never seeded and completed. Nothing stamps
+// it now, so the node places it single_turn, it takes the seeded path, and that
+// path wraps the session — which a tool context reports as nil.
+//
+// The panic underneath predates this change and is out of scope; the set of
+// callers reaching it did not, so the seeded path reports the missing session
+// instead. Measured: the same call completes on the merge base.
+//
+// The unadopted agent is the control. It reaches the same branch on both sides
+// and panicked on both before this guard, so it shows the guard is what changed
+// the outcome rather than the adoption.
+func TestAgentNode_Run_SeededOverAToolContext_ErrorsRatherThanPanics(t *testing.T) {
+	t.Parallel()
+
+	for _, adopted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unadopted", true: "adoptedByAChatCoordinator"}[adopted], func(t *testing.T) {
+			t.Parallel()
+
+			sub, err := llmagent.New(llmagent.Config{Name: "worker", Description: "w", Model: &capturingLLM{}})
+			if err != nil {
+				t.Fatalf("llmagent.New(sub): %v", err)
+			}
+			if adopted {
+				if _, err := llmagent.New(llmagent.Config{
+					Name: "coord", Description: "c", Mode: llmagent.ModeChat,
+					Model: &capturingLLM{}, SubAgents: []agent.Agent{sub},
+				}); err != nil {
+					t.Fatalf("llmagent.New(coord): %v", err)
+				}
+			}
+			node, err := workflow.NewAgentNode(sub, workflow.NodeConfig{})
+			if err != nil {
+				t.Fatalf("NewAgentNode: %v", err)
+			}
+
+			svc := session.InMemoryService()
+			resp, err := svc.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "u"})
+			if err != nil {
+				t.Fatalf("session.Create: %v", err)
+			}
+			std := runconfig.ToContext(t.Context(), &runconfig.RunConfig{StreamingMode: runconfig.StreamingModeNone})
+			ic := icontext.NewInvocationContext(std, icontext.InvocationContextParams{
+				Agent: sub, Session: resp.Session,
+				UserContent:  genai.NewContentFromText("hi", "user"),
+				InvocationID: "inv-seeded-tool-ctx",
+			})
+			toolCtx := agent.NewToolContext(ic, "fc-1", &session.EventActions{}, nil)
+
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panicked instead of reporting the missing session: %v", r)
+				}
+			}()
+
+			var gotErr error
+			for _, err := range node.Run(toolCtx, "some input") {
+				if err != nil {
+					gotErr = err
+				}
+			}
+			if gotErr == nil {
+				t.Fatal("expected an error for a seeded run over a tool context; got nil")
+			}
+			if !strings.Contains(gotErr.Error(), "session") {
+				t.Errorf("err = %q, want it to name the missing session", gotErr.Error())
+			}
+		})
+	}
+}
+
 // AgentNode.Run is exported and now resolves a mode, which reads ctx. It must
 // reject a nil context rather than dereference it, the way RunLLMAgentAsNode
 // does. The merge base panicked on a nil ctx too — a few lines lower, building
@@ -896,11 +971,14 @@ func TestAgentNode_ASameNamedNestedAgentKeepsItsOwnDeclaration(t *testing.T) {
 // bind honest. That bind is kept for uniformity on the argument that a chat
 // binding is indistinguishable from no binding.
 //
-// Note what this does and does not establish. It fails if the root binds a mode
-// readers DO distinguish, so it guards against a future reader learning to tell
-// chat from unset. It does NOT fail if the root bind is deleted, because for an
-// undeclared agent chat and absent are the same answer everywhere — so it is a
-// guard, not corroboration that the bind is inert.
+// Note what this does and does not establish. It fails if a same-named nested
+// agent can read the root's binding at all, which is the identity half of the
+// key doing its job. It does NOT fail if the root bind is deleted, because for
+// an undeclared agent chat and absent are the same answer everywhere. Nor does
+// it fail if the root binds some other mode: identity is in the key, so a
+// foreign binding is invisible to this agent whatever its value — an earlier
+// version of this comment claimed that guard, and the design makes it
+// unreachable.
 //
 // Same collision as above, except the nested same-named agent is undeclared. It
 // must come out identical to the same tree with the collision renamed away.

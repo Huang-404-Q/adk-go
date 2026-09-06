@@ -25,11 +25,14 @@ import (
 	"google.golang.org/adk/v2/session"
 )
 
-// The last of the five writes this change removes, and the only one nothing
-// else can see gone. Run used to stamp ModeChat onto an undeclared root's
-// shared State. Every reader treats chat and unset alike, so no value assertion
-// elsewhere can tell the write from its absence, and no concurrent test drives
-// Run, so the race detector cannot either.
+// The last of the five writes this change removes. Run used to stamp ModeChat
+// onto an undeclared root's shared State. Every reader ON THE RUN PATH treats
+// chat and unset alike, so no assertion about a run can tell the write from its
+// absence, and no concurrent test drives Run, so the race detector cannot
+// either. One reader off that path does distinguish them: workflow's
+// agentNodeMode resolves unset to single_turn and leaves chat alone, so the
+// stamp used to make a later graph fail validateChatModeWiring. That is a
+// separate consequence, pinned in workflow, and not what this test is for.
 //
 // It lives in this directory on purpose. The property is about this package's
 // behaviour, and a version of it in another DIRECTORY leaves `go test ./runner/`
