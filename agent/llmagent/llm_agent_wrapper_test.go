@@ -1371,3 +1371,47 @@ func TestRunLLMAgentAsNode_DoesNotMutateTheAgentsIncludeContents(t *testing.T) {
 		t.Errorf("IncludeContents after a single_turn run = %q, want empty (a run must not mutate the agent)", got)
 	}
 }
+
+// The third write this PR removes that lives in this package, and the third
+// pinned only from workflow_test. installTaskTools used to stamp chat onto an
+// undeclared sub-agent while building a coordinator's tool list, which is what
+// made a coordinator's view of a shared sub-agent depend on construction order.
+// `go test ./agent/llmagent/` was green with that write restored — the whole
+// suite catches it, but not from the package that owns it.
+func TestLlmAgent_New_DoesNotMutateASubAgentsMode(t *testing.T) {
+	t.Parallel()
+
+	sub, err := llmagent.New(llmagent.Config{Name: "worker"})
+	if err != nil {
+		t.Fatalf("llmagent.New(worker): %v", err)
+	}
+	internalSub, ok := sub.(llminternal.Agent)
+	if !ok {
+		t.Fatal("sub-agent is not an llminternal.Agent")
+	}
+	if got := llminternal.Reveal(internalSub).Mode; got != llminternal.ModeUnset {
+		t.Fatalf("precondition: declared mode = %q, want unset", got)
+	}
+
+	// A declared task sibling, so installTaskTools has something to install and
+	// the loop that used to carry the write actually runs over the undeclared one.
+	task, err := llmagent.New(llmagent.Config{Name: "tasker", Mode: llmagent.ModeTask})
+	if err != nil {
+		t.Fatalf("llmagent.New(tasker): %v", err)
+	}
+	coord, err := llmagent.New(llmagent.Config{
+		Name:      "coordinator",
+		Mode:      llmagent.ModeChat,
+		SubAgents: []agent.Agent{sub, task},
+	})
+	if err != nil {
+		t.Fatalf("llmagent.New(coordinator): %v", err)
+	}
+	if len(llminternal.Reveal(coord.(llminternal.Agent)).Tools) == 0 {
+		t.Fatal("the coordinator installed no tools, so installTaskTools did not run")
+	}
+
+	if got := llminternal.Reveal(internalSub).Mode; got != llminternal.ModeUnset {
+		t.Errorf("the undeclared sub-agent's mode after building a coordinator = %q, want unset", got)
+	}
+}
