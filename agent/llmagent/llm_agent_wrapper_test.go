@@ -26,6 +26,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	icontext "google.golang.org/adk/v2/internal/context"
+	"google.golang.org/adk/v2/internal/llminternal"
 	"google.golang.org/adk/v2/internal/workflowinternal"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/runner"
@@ -698,8 +699,8 @@ func TestRunLLMAgentAsNode_UnsupportedMode_Errors(t *testing.T) {
 // Resolving the mode reads ctx, so an exported entry point has to reject a nil
 // one rather than dereference it. This agent declares single_turn, so on the
 // merge base it passed the mode check and then panicked at ctx.UserContent().
-// An error is better than either. (The bogus-mode test above is the case where
-// the base did error at the check.)
+// Erroring before any of that is better. (The bogus-mode test above is the case
+// where the base did error at the check.)
 func TestRunLLMAgentAsNode_NilContext_Errors(t *testing.T) {
 	t.Parallel()
 	a := makeLLMAgent(t, "x", withMode(llmagent.ModeSingleTurn))
@@ -1323,5 +1324,50 @@ func TestRunLLMAgentAsNode_SingleTurnAcceptsAToolContext(t *testing.T) {
 	// regression, and only reaching the model rules it out.
 	if llm.got == nil {
 		t.Error("the model was never called; the single_turn branch did not run the agent")
+	}
+}
+
+// The wrapper's two removed writes are pinned from workflow_test, which leaves
+// `go test ./agent/llmagent/` — the loop someone editing this file runs — unable
+// to see one of them come back. Restoring the mode write fails ten tests here,
+// so that one is covered locally. Restoring the IncludeContents write in its
+// guarded form fails nothing in this package at all.
+func TestRunLLMAgentAsNode_DoesNotMutateTheAgentsIncludeContents(t *testing.T) {
+	t.Parallel()
+
+	llm := &recordingLLM{}
+	a := makeLLMAgent(t, "worker", withMode(llmagent.ModeSingleTurn),
+		func(c *llmagent.Config) { c.Model = llm })
+
+	internalAgent, ok := a.(llminternal.Agent)
+	if !ok {
+		t.Fatal("agent is not an llminternal.Agent")
+	}
+	if got := llminternal.Reveal(internalAgent).IncludeContents; got != "" {
+		t.Fatalf("precondition: IncludeContents = %q, want empty", got)
+	}
+
+	svc := session.InMemoryService()
+	resp, err := svc.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "u"})
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	ic := icontext.NewInvocationContext(t.Context(), icontext.InvocationContextParams{
+		Agent:        a,
+		Session:      resp.Session,
+		UserContent:  genai.NewContentFromText("hi", "user"),
+		InvocationID: "inv-ic",
+	})
+	for _, err := range llmagent.RunLLMAgentAsNode(a, agent.NewContext(ic), "go") {
+		if err != nil {
+			t.Fatalf("RunLLMAgentAsNode: %v", err)
+		}
+	}
+	if llm.got == nil {
+		t.Fatal("the model was never called, so the single_turn path was not exercised")
+	}
+
+	if got := llminternal.Reveal(internalAgent).IncludeContents; got != "" {
+		t.Errorf("IncludeContents after a single_turn run = %q, want empty (a run must not mutate the agent)", got)
 	}
 }

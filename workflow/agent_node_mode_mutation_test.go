@@ -314,7 +314,8 @@ func TestOneAgentInstance_ConcurrentInvocationsAreRaceFree(t *testing.T) {
 	}
 }
 
-// The sibling of the test above, for the dimension it cannot see. Construction
+// The sibling of TestLlmAgent_SubAgentModeResolution_IsConstructionOrderIndependent,
+// for the dimension that test cannot see. Construction
 // order moved two things on the merge base, not one: which delegation tool the
 // coordinator installed, and whether the sub-agent was a transfer TARGET.
 // Node-first stamped the undeclared agent single_turn, and isUntransferableMode

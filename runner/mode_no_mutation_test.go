@@ -31,10 +31,11 @@ import (
 // elsewhere can tell the write from its absence, and no concurrent test drives
 // Run, so the race detector cannot either.
 //
-// It lives in package runner on purpose. The property is about this package's
-// behaviour, and a version of it in another package leaves `go test ./runner/`
+// It lives in this directory on purpose. The property is about this package's
+// behaviour, and a version of it in another DIRECTORY leaves `go test ./runner/`
 // green while the write is back — which is the loop someone editing this file
-// actually runs.
+// actually runs. package runner rather than runner_test only so it can reuse
+// scriptedModel.
 func TestRun_DoesNotMutateTheRootAgentsMode(t *testing.T) {
 	t.Parallel()
 

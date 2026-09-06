@@ -654,6 +654,10 @@ func TestAgentNode_Run_AcceptsAToolContext(t *testing.T) {
 	})
 	toolCtx := agent.NewToolContext(ic, "fc-1", &session.EventActions{}, nil)
 
+	// nodeInput must be nil. A non-nil one takes the seeded path, and seeding
+	// under a tool context panics — the context reports no session, which
+	// wrappedSession then wraps. Measured on the merge base as well as here, so
+	// it is not this change's to fix and not this test's to assert.
 	got := 0
 	for _, err := range node.Run(toolCtx, nil) {
 		if err != nil {
