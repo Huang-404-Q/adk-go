@@ -41,8 +41,16 @@ import "context"
 // targets the caller's binding is still live in that context. It is looked past
 // deliberately.
 //
-// Every other reader resolves. A reader that tests for single_turn and skips
-// the resolution disagrees with the request the flow actually builds.
+// Every other reader resolves, with one deliberate exception. A reader that
+// tests for single_turn and skips the resolution disagrees with the request the
+// flow actually builds.
+//
+// The exception is the history half of the contents processor, which asks
+// BoundMode directly rather than going through ModeFor. It is the one reader
+// that has to tell a single_turn PLACEMENT from a single_turn DECLARATION —
+// only the placement hides the conversation — and resolving flattens exactly
+// that distinction. Its other half, the single-turn nudge, resolves like
+// everything else.
 //
 // The binding names the agent it describes, and the name is part of the context
 // KEY rather than of the value. Two properties follow, and both are needed.
