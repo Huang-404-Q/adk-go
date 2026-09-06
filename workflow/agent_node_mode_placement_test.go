@@ -615,11 +615,11 @@ func TestAgentNode_PlacementSurvivesATransferRoundTrip(t *testing.T) {
 	}
 }
 
-// AgentNode.Run must tolerate a tool context, and must still place the agent
-// while doing so. agent.Context.WithAgentContext returns nil for the tool and
-// callback wrappers rather than erroring, so routing the placement back through
-// ctx crashes here on a path where every symbol is exported. The merge base
-// drained events for such a caller and this must keep doing so.
+// AgentNode.Run must tolerate the two context wrappers whose WithAgentContext
+// returns nil rather than erroring, and must still place the agent while doing
+// so. Routing the placement back through ctx crashes on a path where every
+// symbol is exported. The merge base drained events for such a caller and this
+// must keep doing so.
 //
 // The agent deliberately declares NO mode. A chat declaration would make this
 // test blind to half of what it is for: chat and "no binding" are the same
@@ -627,136 +627,85 @@ func TestAgentNode_PlacementSurvivesATransferRoundTrip(t *testing.T) {
 // panic by dropping the placement — would pass. Undeclared, the placement is
 // the only thing that makes this agent single_turn, and its loss is visible in
 // the system instruction.
-func TestAgentNode_Run_AcceptsAToolContext(t *testing.T) {
-	t.Parallel()
-
-	llm := &capturingLLM{}
-	peer, err := llmagent.New(llmagent.Config{Name: "peer", Model: &capturingLLM{}, Description: "a peer"})
-	if err != nil {
-		t.Fatalf("llmagent.New(peer): %v", err)
-	}
-	a, err := llmagent.New(llmagent.Config{
-		Name: "c", Description: "c", Model: llm,
-		Instruction: "OWN_INSTRUCTION",
-		SubAgents:   []agent.Agent{peer},
-	})
-	if err != nil {
-		t.Fatalf("llmagent.New: %v", err)
-	}
-	node, err := workflow.NewAgentNode(a, workflow.NodeConfig{})
-	if err != nil {
-		t.Fatalf("NewAgentNode: %v", err)
-	}
-
-	svc := session.InMemoryService()
-	resp, err := svc.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "u"})
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
-	std := runconfig.ToContext(t.Context(), &runconfig.RunConfig{StreamingMode: runconfig.StreamingModeNone})
-	ic := icontext.NewInvocationContext(std, icontext.InvocationContextParams{
-		Agent: a, Session: resp.Session,
-		UserContent:  genai.NewContentFromText("hi", "user"),
-		InvocationID: "inv-tool-ctx",
-	})
-	toolCtx := agent.NewToolContext(ic, "fc-1", &session.EventActions{}, nil)
-
-	// nodeInput must be nil. A non-nil one takes the seeded path, and seeding
-	// under a tool context panics — the context reports no session, which
-	// wrappedSession then wraps. Measured on the merge base as well as here, so
-	// it is not this change's to fix and not this test's to assert.
-	got := 0
-	for _, err := range node.Run(toolCtx, nil) {
-		if err != nil {
-			t.Fatalf("node.Run: %v", err)
-		}
-		got++
-	}
-	if got == 0 {
-		t.Fatal("node.Run over a tool context produced no events")
-	}
-
-	// Draining is only half of it. The placement has to have survived, which is
-	// what a nil guard that keeps the old ctx would quietly lose.
-	si := llm.systemInstruction()
-	if !strings.Contains(si, "OWN_INSTRUCTION") {
-		t.Fatalf("the agent's own instruction is missing, so the absences below prove nothing; si = %q", si)
-	}
-	if strings.Contains(si, "You are an agent") {
-		t.Error("the node's agent got the identity preamble, so the single_turn placement was dropped")
-	}
-	if strings.Contains(si, "transfer_to_agent") {
-		t.Error("the node's agent got transfer instructions, so the single_turn placement was dropped")
-	}
-}
-
-// The callback context is the other wrapper whose WithAgentContext returns nil
-// rather than erroring, and both are named in the comments that shaped this
-// design. For everything AgentNode.Run touches it behaves exactly as the tool
-// context does — Session, Memory and RunConfig nil, IsolationScope empty — so
-// this test pins that the two stay equivalent rather than reaching a new path.
-// It exists because those comments claim the callback context is handled and
-// nothing drove one.
 //
-// As in the tool-context test the agent declares NO mode and carries a peer,
-// so dropping the placement is visible: an unplaced agent would be chat and
-// would collect the identity preamble and the transfer instructions.
-func TestAgentNode_Run_AcceptsACallbackContext(t *testing.T) {
+// The two wrappers are one table rather than two tests because for everything
+// this function touches they behave identically — Session, Memory and RunConfig
+// nil, IsolationScope empty — so the callback row pins that they stay
+// equivalent rather than reaching a path of its own.
+func TestAgentNode_Run_AcceptsAWrapperContext(t *testing.T) {
 	t.Parallel()
 
-	llm := &capturingLLM{}
-	peer, err := llmagent.New(llmagent.Config{Name: "peer", Model: &capturingLLM{}, Description: "a peer"})
-	if err != nil {
-		t.Fatalf("llmagent.New(peer): %v", err)
-	}
-	a, err := llmagent.New(llmagent.Config{
-		Name: "c", Description: "c", Model: llm,
-		Instruction: "OWN_INSTRUCTION",
-		SubAgents:   []agent.Agent{peer},
-	})
-	if err != nil {
-		t.Fatalf("llmagent.New: %v", err)
-	}
-	node, err := workflow.NewAgentNode(a, workflow.NodeConfig{})
-	if err != nil {
-		t.Fatalf("NewAgentNode: %v", err)
-	}
+	for _, tc := range []struct {
+		name string
+		wrap func(agent.InvocationContext) agent.Context
+	}{
+		{"tool", func(ic agent.InvocationContext) agent.Context {
+			return agent.NewToolContext(ic, "fc-1", &session.EventActions{}, nil)
+		}},
+		{"callback", func(ic agent.InvocationContext) agent.Context {
+			return agent.NewCallbackContext(ic, &session.EventActions{})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	svc := session.InMemoryService()
-	resp, err := svc.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "u"})
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
-	std := runconfig.ToContext(t.Context(), &runconfig.RunConfig{StreamingMode: runconfig.StreamingModeNone})
-	ic := icontext.NewInvocationContext(std, icontext.InvocationContextParams{
-		Agent: a, Session: resp.Session,
-		UserContent:  genai.NewContentFromText("hi", "user"),
-		InvocationID: "inv-cb-ctx",
-	})
-	cbCtx := agent.NewCallbackContext(ic, &session.EventActions{})
+			llm := &capturingLLM{}
+			peer, err := llmagent.New(llmagent.Config{Name: "peer", Model: &capturingLLM{}, Description: "a peer"})
+			if err != nil {
+				t.Fatalf("llmagent.New(peer): %v", err)
+			}
+			a, err := llmagent.New(llmagent.Config{
+				Name: "c", Description: "c", Model: llm,
+				Instruction: "OWN_INSTRUCTION",
+				SubAgents:   []agent.Agent{peer},
+			})
+			if err != nil {
+				t.Fatalf("llmagent.New: %v", err)
+			}
+			node, err := workflow.NewAgentNode(a, workflow.NodeConfig{})
+			if err != nil {
+				t.Fatalf("NewAgentNode: %v", err)
+			}
 
-	// nodeInput must be nil, for the same reason as the tool-context test: the
-	// seeded path needs a session and this context reports none.
-	got := 0
-	for _, err := range node.Run(cbCtx, nil) {
-		if err != nil {
-			t.Fatalf("node.Run: %v", err)
-		}
-		got++
-	}
-	if got == 0 {
-		t.Fatal("node.Run over a callback context produced no events")
-	}
+			svc := session.InMemoryService()
+			resp, err := svc.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "u"})
+			if err != nil {
+				t.Fatalf("session.Create: %v", err)
+			}
+			std := runconfig.ToContext(t.Context(), &runconfig.RunConfig{StreamingMode: runconfig.StreamingModeNone})
+			ic := icontext.NewInvocationContext(std, icontext.InvocationContextParams{
+				Agent: a, Session: resp.Session,
+				UserContent:  genai.NewContentFromText("hi", "user"),
+				InvocationID: "inv-" + tc.name + "-ctx",
+			})
 
-	si := llm.systemInstruction()
-	if !strings.Contains(si, "OWN_INSTRUCTION") {
-		t.Fatalf("the agent's own instruction is missing, so the absences below prove nothing; si = %q", si)
-	}
-	if strings.Contains(si, "You are an agent") {
-		t.Error("the node's agent got the identity preamble, so the single_turn placement was dropped")
-	}
-	if strings.Contains(si, "transfer_to_agent") {
-		t.Error("the node's agent got transfer instructions, so the single_turn placement was dropped")
+			// nodeInput must be nil. A non-nil one takes the seeded path, which
+			// needs a session neither wrapper reports; that case is the test
+			// below.
+			got := 0
+			for _, err := range node.Run(tc.wrap(ic), nil) {
+				if err != nil {
+					t.Fatalf("node.Run: %v", err)
+				}
+				got++
+			}
+			if got == 0 {
+				t.Fatalf("node.Run over a %s context produced no events", tc.name)
+			}
+
+			// Draining is only half of it. The placement has to have survived,
+			// which is what a nil guard that keeps the old ctx would quietly lose.
+			si := llm.systemInstruction()
+			if !strings.Contains(si, "OWN_INSTRUCTION") {
+				t.Fatalf("the agent's own instruction is missing, so the absences below prove nothing; si = %q", si)
+			}
+			if strings.Contains(si, "You are an agent") {
+				t.Error("the node's agent got the identity preamble, so the single_turn placement was dropped")
+			}
+			if strings.Contains(si, "transfer_to_agent") {
+				t.Error("the node's agent got transfer instructions, so the single_turn placement was dropped")
+			}
+		})
 	}
 }
 

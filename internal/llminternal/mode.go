@@ -64,12 +64,9 @@ import "context"
 // child that declares its own mode — and would govern all of them.
 //
 // A binding also survives a nested activation that binds a different agent.
-// Storing one pair under one key gave only the first property: a single_turn
-// graph node that transferred to a chat peer had its slot overwritten, and when
-// the peer transferred back the node's own agent was re-entered on the peer's
-// context and fell back to chat, taking the identity preamble, the transfer
-// instructions and the whole conversation with it. Placements nest, so the
-// bindings have to nest too.
+// Placements nest — a single_turn graph node transfers to a chat peer, which
+// transfers back — so the bindings have to nest too, which one pair under one
+// shared key does not do.
 //
 // The name alone is not enough to say WHOSE binding one is. Names are unique
 // only across SubAgents(), and a graph node's agent is not in SubAgents(), so
@@ -110,20 +107,11 @@ func ResolveMode(declared, byPlacement Mode) Mode {
 // lookup chain, and the reader then rejected it, so the agent that owned it
 // silently lost its placement.
 //
-// The name earns its place differently, and not the way it might look. It is
-// NOT what makes re-binding the same agent shadow its outer binding — that is
-// the identity, which is equal on both binds, so the key would be equal with or
-// without the name. Every binder and every reader pairs an agent's name with
-// that same agent's state, so the name is a function of the identity and adds
-// nothing to a lookup.
-//
-// It is kept as a cheap guard against a future binder or reader that pairs the
-// two inconsistently. Against a state-only key such a pairing is a wrong HIT —
-// one agent governed by another's resolved mode — and the name turns it into a
-// miss, which is the safer failure. That is a different mistake from the three
-// regressions above, which were all errors in the key's design rather than in
-// how a call site pairs a name with a state. It also makes a key far easier to
-// read in a dump than a bare pointer.
+// The name adds nothing to a lookup: every binder and reader pairs an agent's
+// name with that same agent's state, so it is a function of the identity. It is
+// kept because a future call site that pairs them inconsistently would be a
+// wrong HIT against a state-only key — one agent governed by another's resolved
+// mode — and the name turns that into a miss, which is the safer failure.
 type boundModeKey struct {
 	agent string
 	state *State

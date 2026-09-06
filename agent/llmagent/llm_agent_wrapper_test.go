@@ -1322,17 +1322,11 @@ func fcContent(id, name string, args map[string]any) *genai.Content {
 // RunLLMAgentAsNode is exported, and agent.Context.WithAgentContext returns nil
 // for the tool and callback wrappers rather than erroring, so routing the mode
 // binding back through it nils the context out. This pins that the single_turn
-// and task branches do not do that: they panic if the binding is routed back
-// unguarded.
+// branch does not do that: it panics if the binding is routed back unguarded.
 //
-// What it does NOT pin is the binding itself. The agent here declares
-// single_turn, so deleting the bind leaves the same branch selected and this
-// test still passes. Its workflow-side sibling avoids that by declaring no
-// mode, and the same trick does not work here: an undeclared agent with no
-// binding resolves to chat at this entry point, which is a different case
-// covered by the test below. The binding is pinned locally instead by
-// TestRunLLMAgentAsNode_DeclaredSingleTurn_BindsForTheRequestProcessors, which
-// fails when it is deleted.
+// It does not pin the binding itself — the agent declares single_turn, so
+// deleting the bind selects the same branch. Another test in this file covers
+// that.
 func TestRunLLMAgentAsNode_SingleTurnAcceptsAToolContext(t *testing.T) {
 	t.Parallel()
 

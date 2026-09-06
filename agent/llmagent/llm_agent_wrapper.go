@@ -130,30 +130,24 @@ func RunLLMAgentAsNode(a agent.Agent, ctx agent.Context, nodeInput any) iter.Seq
 			// re-binds rather than passing `bound` down.
 			//
 			// WithAgentContext returns nil for a tool or callback context
-			// instead of erroring, and a chat run cannot survive one: agent.Run
-			// calls ctx.WithContext, which those same wrappers also return nil
-			// from, and the flow dereferences it. Reporting that is the whole
-			// point of this branch. Carrying on with the unbound context
-			// instead — which an earlier revision did — reaches the same dead
-			// end by way of a nil-pointer panic several frames down.
+			// instead of erroring, and a chat run cannot survive one anyway:
+			// agent.Run calls ctx.WithContext, which those wrappers also return
+			// nil from, and the flow dereferences it. So report it here rather
+			// than crash several frames down.
 			//
-			// This is where an undeclared agent over a tool or callback context
-			// notices the chat fallback: the merge base stamped it single_turn,
-			// which took the branch below and built its own context, so the
-			// same call used to work. It is not the only place the fallback is
-			// observable — a composite's undeclared child re-entered by a
-			// transfer-back also runs chat here where it ran single_turn, over
-			// an ordinary context and without any error. Both are documented
-			// behaviour changes rather than accidents.
+			// An undeclared agent notices the chat fallback here, where the
+			// merge base stamped it single_turn and the branch below built its
+			// own context. Enumerated in the PR description, along with the
+			// other place it shows: a composite's undeclared child re-entered
+			// by a transfer-back.
 			//
-			// Kept in a local rather than assigned back to ctx, which is this
-			// closure's captured parameter. A second sequential range would be
-			// unharmed either way — re-deriving the binding gives the same key
-			// and value — so what the local prevents is two goroutines ranging
-			// one returned iterator, a write/write race on that parameter.
+			// Kept in a local rather than assigned back to ctx, this closure's
+			// captured parameter: re-deriving the binding on a second range is
+			// harmless, but two goroutines ranging one returned iterator would
+			// be a write/write race on that parameter.
 			chatCtx := ctx.WithAgentContext(bound)
 			if chatCtx == nil {
-				yield(nil, fmt.Errorf("RunLLMAgentAsNode: LlmAgent %q runs as chat here, which a tool or callback context cannot drive", a.Name()))
+				yield(nil, fmt.Errorf("RunLLMAgentAsNode: LlmAgent %q runs as chat here, which needs an agent context this one cannot produce (a tool or callback context, typically)", a.Name()))
 				return
 			}
 			runChat(a, chatCtx, yield)
@@ -216,10 +210,10 @@ func PrepareLLMAgentInput(a agent.Agent, ctx agent.InvocationContext, nodeInput 
 	if !ok || llmA == nil {
 		return nil
 	}
-	// Exported, so nil is worth surviving rather than panicking: ModeFor reads
-	// ctx.Value below, and the event built further down reads InvocationID off
-	// it. This catches an untyped nil only — a typed-nil InvocationContext still
-	// panics, as it would anywhere else in the package.
+	// Exported, and everything below reads ctx, so return the same nil this
+	// function already returns for an agent it cannot seed rather than
+	// panicking. Untyped nil only: a typed-nil InvocationContext still panics,
+	// as it would anywhere else in the package.
 	if ctx == nil {
 		return nil
 	}
