@@ -91,8 +91,9 @@ func (n *AgentNode) Run(ctx agent.Context, input any) iter.Seq2[*session.Event, 
 		}
 
 		// A graph node is a one-shot placement: an agent that declares no
-		// mode runs single_turn here. Bound under the agent's own name so it
-		// cannot govern a peer this agent later transfers to.
+		// mode runs single_turn here. Bound under this agent's own key — its
+		// name and its identity — so it cannot govern a peer this agent later
+		// transfers to, nor a same-named agent nested beneath it.
 		//
 		// The binding goes into the context this function passes DOWN, not back
 		// into ctx. Routing it through ctx.WithAgentContext would be the obvious

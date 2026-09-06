@@ -101,9 +101,10 @@ func RunLLMAgentAsNode(a agent.Agent, ctx agent.Context, nodeInput any) iter.Seq
 				a.Name(), mode))
 			return
 		}
-		// Re-bind under this agent's own name so the request processors
-		// downstream agree with the branch taken here, and so a mode resolved
-		// for this agent never governs a peer or child.
+		// Re-bind under this agent's own key — its name and its identity — so
+		// the request processors downstream agree with the branch taken here,
+		// and so a mode resolved for this agent never governs a peer, a child,
+		// or a same-named agent nested beneath it.
 		//
 		// As in AgentNode.Run, the binding travels in the context passed DOWN,
 		// which is what reaches the request processors.
@@ -130,10 +131,15 @@ func RunLLMAgentAsNode(a agent.Agent, ctx agent.Context, nodeInput any) iter.Seq
 			// chat on this branch, and every reader treats a chat binding and
 			// an absent one identically, which is the same reason the runner's
 			// root bind is inert.
+			//
+			// Kept in a local rather than assigned back to ctx: ctx is this
+			// closure's captured parameter, and writing it would make the
+			// returned iterator stateful for a caller that ranges it twice.
+			chatCtx := ctx
 			if rebound := ctx.WithAgentContext(bound); rebound != nil {
-				ctx = rebound
+				chatCtx = rebound
 			}
-			runChat(a, ctx, yield)
+			runChat(a, chatCtx, yield)
 		case llminternal.ModeSingleTurn, llminternal.ModeTask:
 			userContent := ctx.UserContent()
 			if nodeInput != nil {
