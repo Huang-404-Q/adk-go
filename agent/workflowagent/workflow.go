@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"iter"
 
+	"google.golang.org/genai"
+
 	"google.golang.org/adk/v2/agent"
 	agentinternal "google.golang.org/adk/v2/internal/agent"
 	"google.golang.org/adk/v2/internal/utils"
@@ -159,18 +161,54 @@ func (a *workflowAgent) detectResume(ctx agent.InvocationContext) (map[string]an
 	// Resume, so the caller keeps the ErrNothingToResume diagnostic.
 	known := workflowstate.ActionableInterruptIDs(state)
 	responses := map[string]any{}
+	live := false
 	for _, fr := range frs {
 		if fr == nil || fr.ID == "" {
 			continue
 		}
-		if _, ok := known[fr.ID]; !ok && fr.Name != workflow.WorkflowInputFunctionCallName {
+		actionable, ok := known[fr.ID]
+		if !ok && fr.Name != workflow.WorkflowInputFunctionCallName {
 			continue
 		}
+		live = live || actionable
 		responses[fr.ID] = utils.UnwrapResponse(fr.Response)
 	}
 	if len(responses) == 0 {
 		return nil, nil, false, nil
 	}
+	// Every match is a replay of an answer the run has already acted on, so
+	// Resume would schedule nothing and fail the turn. Alone that is the
+	// right diagnostic and the caller reports it, but when the message
+	// carries anything else the failure would discard that too — a client
+	// that echoes a settled approval alongside the human's next instruction
+	// must still get the instruction run.
+	if !live && carriesOtherContent(ctx.UserContent(), responses) {
+		return nil, nil, false, nil
+	}
 
 	return responses, state, true, nil
+}
+
+// carriesOtherContent reports whether msg holds anything beyond the
+// FunctionResponses in matched — user text, a reply aimed elsewhere, an
+// attachment. Such a turn has work of its own, so it must run rather than fail.
+func carriesOtherContent(msg *genai.Content, matched map[string]any) bool {
+	if msg == nil {
+		return false
+	}
+	for _, p := range msg.Parts {
+		if p == nil {
+			continue
+		}
+		if fr := p.FunctionResponse; fr != nil {
+			if _, ok := matched[fr.ID]; !ok {
+				return true
+			}
+			continue
+		}
+		if p.Text != "" || p.FunctionCall != nil || p.InlineData != nil || p.FileData != nil {
+			return true
+		}
+	}
+	return false
 }

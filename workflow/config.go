@@ -63,7 +63,7 @@ type NodeConfig struct {
 	// (re-entry mode), &false routes the resume payload to the
 	// node's successor as input (handoff mode), and nil defers to
 	// the node kind. NewDynamicNode, and NewAgentNode over an
-	// LlmAgent, default nil to &true; every other kind leaves it
+	// LlmAgent, default nil to &true. Every other kind leaves it
 	// nil, which the engine treats as handoff.
 	RerunOnResume *bool
 

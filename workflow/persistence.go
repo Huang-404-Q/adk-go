@@ -356,6 +356,10 @@ func (w *Workflow) inferNodeState(node Node, scan *nodeScanState, nodeOutputs ma
 		ns.ResumedInputs = resumed
 		ns.Interrupts = unresolved
 		ns.Input, ns.TriggeredBy = w.predecessorInput(node, nodeOutputs, workflowInput)
+		// Same replay guard as the all-resolved arm below: a node still
+		// holding an open interrupt is no less exposed to a duplicate
+		// answer than one that has none.
+		ns.reentryConsumed = allConsumed(scan, resumed)
 	case len(unresolved) > 0:
 		// Still waiting for the remaining interrupts.
 		ns.Status = NodeWaiting

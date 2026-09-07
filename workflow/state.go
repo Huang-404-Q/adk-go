@@ -179,19 +179,30 @@ type RunState struct {
 	completed map[string]bool
 }
 
-// actionableInterruptIDs returns the interrupt IDs this run can still do
-// something about: those a node is waiting for, those a re-entry node is about
-// to be re-run with, and those a node settled on this very turn. A
-// FunctionResponse matching none of them answers nothing here — it is a reply
-// to an interrupt this run has finished with, or was never aimed at this run.
+// actionableInterruptIDs returns the interrupt IDs this run recognises, mapped
+// to whether Resume can still do something with them: those a node is waiting
+// for, those a re-entry node is about to be re-run with, and those a node
+// settled on this very turn are live (true). An answer a re-entry node has
+// already acted on is recognised but spent (false) — Resume will skip that node
+// rather than re-run it, so routing a turn there on its strength alone would
+// fail the turn with ErrNothingToResume. A FunctionResponse absent from the map
+// answers nothing here at all: it replies to an interrupt this run has finished
+// with, or was never aimed at this run.
 //
 // Reachable from the packages that dispatch a turn through
 // internal/workflowstate rather than as public API, since "settled on this very
 // turn" is only observable on a state fresh from ReconstructRunState.
 //
 //nolint:unused // installed into internal/workflowstate by init below.
-func (s *RunState) actionableInterruptIDs() map[string]struct{} {
-	ids := map[string]struct{}{}
+func (s *RunState) actionableInterruptIDs() map[string]bool {
+	ids := map[string]bool{}
+	mark := func(id string, live bool) {
+		if id == "" {
+			return
+		}
+		// Two nodes can name one ID; live anywhere wins.
+		ids[id] = ids[id] || live
+	}
 	for _, ns := range s.Nodes {
 		if ns == nil {
 			continue
@@ -203,21 +214,18 @@ func (s *RunState) actionableInterruptIDs() map[string]struct{} {
 			continue
 		}
 		for _, id := range ns.Interrupts {
-			if id != "" {
-				ids[id] = struct{}{}
-			}
+			// Still open, whatever became of this node's other answers.
+			mark(id, true)
 		}
 		for id := range ns.ResumedInputs {
-			if id != "" {
-				ids[id] = struct{}{}
-			}
+			mark(id, !ns.reentryConsumed)
 		}
 	}
 	return ids
 }
 
 func init() {
-	workflowstate.ActionableInterruptIDs = func(runState any) map[string]struct{} {
+	workflowstate.ActionableInterruptIDs = func(runState any) map[string]bool {
 		st, ok := runState.(*RunState)
 		if !ok || st == nil {
 			return nil

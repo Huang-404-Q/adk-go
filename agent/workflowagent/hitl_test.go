@@ -782,6 +782,57 @@ func newConsentAgent(t *testing.T, name, fcID string, runs *atomic.Int32, gotInp
 	return a
 }
 
+// newTwoInterruptAgent pauses on TWO long-running requests at once, the shape
+// that rehydrates through inferNodeState's partial-resume arm. Once the first
+// is answered it performs a counted action and pauses on the second alone;
+// once both are answered it completes. approved counts the actions, so a
+// replayed answer that re-runs the node shows up as a second count.
+func newTwoInterruptAgent(t *testing.T, name, idX, idY string, runs, approved *atomic.Int32) agent.Agent {
+	t.Helper()
+	pause := func(ctx agent.InvocationContext, ids ...string) *session.Event {
+		ev := session.NewEvent(ctx, ctx.InvocationID())
+		ev.Author = name
+		ev.LongRunningToolIDs = ids
+		parts := make([]*genai.Part, 0, len(ids))
+		for _, id := range ids {
+			parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{
+				ID: id, Name: "adk_request_credential",
+			}})
+		}
+		ev.LLMResponse = model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: parts}}
+		return ev
+	}
+	a, err := agent.New(agent.Config{
+		Name: name,
+		Run: func(ctx agent.InvocationContext) iter.Seq2[*session.Event, error] {
+			return func(yield func(*session.Event, error) bool) {
+				runs.Add(1)
+				switch {
+				case !answeredInHistory(ctx.Session(), idX):
+					yield(pause(ctx, idX, idY), nil)
+				case !answeredInHistory(ctx.Session(), idY):
+					approved.Add(1)
+					yield(pause(ctx, idY), nil)
+				default:
+					approved.Add(1)
+					done := session.NewEvent(ctx, ctx.InvocationID())
+					done.Author = name
+					done.Output = "done"
+					done.LLMResponse = model.LLMResponse{Content: &genai.Content{
+						Role:  genai.RoleModel,
+						Parts: []*genai.Part{{Text: "done"}},
+					}}
+					yield(done, nil)
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	return a
+}
+
 // credentialResume builds a user message carrying a consent FunctionResponse.
 // The name is adk_request_credential (not adk_request_input) to exercise the
 // name-agnostic resume dispatch.
@@ -907,5 +958,89 @@ func TestWorkflowAgent_Resume_ReentryIsIdempotent(t *testing.T) {
 	if got := runs.Load(); got != afterFirst {
 		t.Errorf("worker runs = %d after a replayed approval, want %d "+
 			"(a duplicate resume must reschedule nothing)", got, afterFirst)
+	}
+}
+
+// TestWorkflowAgent_SettledReplyDoesNotDiscardNewText covers the case the
+// ID-keyed filter alone gets wrong. History never un-answers an interrupt, so a
+// re-entry node's settled ID stays recognisable for the rest of the session; a
+// client that echoes it back alongside the human's next instruction would
+// otherwise route the whole turn to Resume, which schedules nothing and fails
+// with ErrNothingToResume — losing the instruction. The bare replay above is
+// still an error; this one has work to do.
+func TestWorkflowAgent_SettledReplyDoesNotDiscardNewText(t *testing.T) {
+	const fcID = "cred-2"
+	var runs atomic.Int32
+	var gotInput atomic.Bool
+	worker, err := workflow.NewAgentNode(
+		newConsentAgent(t, "worker", fcID, &runs, &gotInput),
+		workflow.NodeConfig{RerunOnResume: ptrTrue()},
+	)
+	if err != nil {
+		t.Fatalf("NewAgentNode: %v", err)
+	}
+	a := makeAgent(t, workflow.Chain(workflow.Start, worker))
+	sess := newFakeSession()
+
+	runFreshTurn(t, sess, a, "start")
+	drainAgent(t, sess, a.Run(newMockCtx(sess, a, credentialResume(fcID))), nil)
+	afterFirst := runs.Load()
+
+	// The human's next instruction, with the settled approval echoed back.
+	msg := &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{
+		{Text: "now do something else"},
+		{FunctionResponse: &genai.FunctionResponse{
+			ID: fcID, Name: "adk_request_credential",
+			Response: map[string]any{"status": "approved"},
+		}},
+	}}
+	drainAgent(t, sess, a.Run(newMockCtx(sess, a, msg)), nil)
+
+	if got := runs.Load(); got == afterFirst {
+		t.Errorf("worker runs = %d, want more than %d; the turn was routed to "+
+			"Resume on a settled reply and the user's text was dropped", got, afterFirst)
+	}
+}
+
+// TestWorkflowAgent_Resume_ReentryIsIdempotentWithAnOpenInterrupt is the
+// partial-resume twin of TestWorkflowAgent_Resume_ReentryIsIdempotent. A node
+// pausing on two long-running IDs at once rehydrates through a different arm of
+// inferNodeState, and a node still holding an open interrupt is no less exposed
+// to a duplicate answer than one that has none.
+func TestWorkflowAgent_Resume_ReentryIsIdempotentWithAnOpenInterrupt(t *testing.T) {
+	const idX, idY = "cred-3", "confirm-3"
+	var runs, approved atomic.Int32
+	worker, err := workflow.NewAgentNode(
+		newTwoInterruptAgent(t, "worker", idX, idY, &runs, &approved),
+		workflow.NodeConfig{RerunOnResume: ptrTrue()},
+	)
+	if err != nil {
+		t.Fatalf("NewAgentNode: %v", err)
+	}
+	a := makeAgent(t, workflow.Chain(workflow.Start, worker))
+	sess := newFakeSession()
+
+	runFreshTurn(t, sess, a, "start")
+	// Answer the first of the two; the node re-enters, acts on it, and pauses
+	// again on the second.
+	drainAgent(t, sess, a.Run(newMockCtx(sess, a, credentialResume(idX))), nil)
+	afterFirst := approved.Load()
+	if afterFirst != 1 {
+		t.Fatalf("approved actions after the first answer = %d, want 1", afterFirst)
+	}
+
+	// Replay that same answer. The second interrupt is still open, so the node
+	// is not settled — but this answer is, and re-running on it would redo
+	// what the human already approved.
+	drainAgent(t, sess, a.Run(newMockCtx(sess, a, credentialResume(idX))), workflow.ErrNothingToResume)
+	if got := approved.Load(); got != afterFirst {
+		t.Errorf("approved actions after a replayed answer = %d, want %d", got, afterFirst)
+	}
+
+	// The still-open interrupt must remain answerable.
+	drainAgent(t, sess, a.Run(newMockCtx(sess, a, credentialResume(idY))), nil)
+	if got := approved.Load(); got <= afterFirst {
+		t.Errorf("approved actions after answering the open interrupt = %d, want more than %d "+
+			"(the replay guard swallowed a genuine answer)", got, afterFirst)
 	}
 }
